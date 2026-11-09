@@ -1,0 +1,259 @@
+[
+ {
+  "match": "b390",
+  "device": "Intel Arc B390 (Panther Lake iGPU, 12 Xe3 @ 2.5GHz)",
+  "tflops": {
+   "fp32": 7.68,
+   "fp16": 61.44,
+   "bf16": 61.44
+  },
+  "int8_tops": 122.0,
+  "vec_tflops": {
+   "fp32": 7.68,
+   "fp16": 7.68,
+   "bf16": 7.68
+  },
+  "vec_packed_tflops": {
+   "fp16": 15.36
+  },
+  "bw_gbs": 153.6,
+  "basis": {
+   "fp32": "derived 12 Xe*8 VE*32 FLOP*2.5GHz",
+   "fp16/bf16": "derived 12*8 XMX*256*2.5GHz (not published by ARK; extrapolated from per-engine Xe2 rates)",
+   "vec_fp16": "torch opmath semantics promote fp16/bf16 elementwise math to fp32 (verified in Triton TTIR: .to(tl.float32)), so the torch path tops out at the fp32 rate; the packed fp16x2 peak of 15.36 needs native Triton/OpenCL half arithmetic (B390 measured 11.8 = 77%)",
+   "int8": "published ARK value, 122 TOPS",
+   "bw": "LPDDR5X-9600 128-bit (assumes the X7 358H SKU; actual config may be lower)"
+  },
+  "sources": [
+   "Intel ARK Core Ultra X7 358H",
+   "https://github.com/lhl/intel-inference/blob/main/RESEARCH-hardware.md"
+  ]
+ },
+ {
+  "match": "b580",
+  "device": "Intel Arc B580 (BMG-G21, 20 Xe2 @ 2.67GHz)",
+  "tflops": {
+   "fp32": 13.67,
+   "fp16": 109.36,
+   "bf16": 109.36
+  },
+  "int8_tops": 233.0,
+  "vec_tflops": {
+   "fp32": 13.67,
+   "fp16": 13.67,
+   "bf16": 13.67
+  },
+  "vec_packed_tflops": {
+   "fp16": 27.34
+  },
+  "bw_gbs": 456.0,
+  "basis": {
+   "fp32/fp16": "derived from the 2.67 GHz graphics clock; ARK's 233 INT8 TOPS back-solves to a ~2.84 GHz tensor clock, so the fp16 spec may be ~7% low",
+   "vec_fp16": "same as B390: the torch path runs at the fp32 rate; the packed 27.34 needs native Triton/OpenCL half arithmetic",
+   "int8": "published ARK value",
+   "bw": "published ARK value: GDDR6 19 Gbps 192-bit"
+  },
+  "sources": [
+   "Intel ARK Arc B580",
+   "https://github.com/lhl/intel-inference/blob/main/RESEARCH-hardware.md"
+  ]
+ },
+ {
+  "match": "140v",
+  "device": "Intel Arc Graphics 140V (Lunar Lake iGPU, 8 Xe2 @ 1.95GHz)",
+  "tflops": {
+   "fp32": 3.99,
+   "fp16": 31.95,
+   "bf16": 31.95
+  },
+  "int8_tops": 64.0,
+  "vec_tflops": {
+   "fp32": 3.99,
+   "fp16": 3.99,
+   "bf16": 3.99
+  },
+  "vec_packed_tflops": {
+   "fp16": 7.99
+  },
+  "bw_gbs": 136.5,
+  "basis": {
+   "fp16/bf16": "derived 8*8 XMX*256*1.95GHz (self-consistent with ARK's 64 INT8 TOPS); vec at the fp32 rate (torch opmath semantics)",
+   "bw": "LPDDR5X-8533 128-bit"
+  },
+  "sources": [
+   "Intel ARK Core Ultra 7 258V",
+   "https://github.com/lhl/intel-inference/blob/main/RESEARCH-hardware.md"
+  ]
+ },
+ {
+  "match": "a100-sxm4-80gb",
+  "device": "NVIDIA A100-SXM4-80GB",
+  "tflops": {
+   "fp32": 19.5,
+   "tf32": 156.0,
+   "fp16": 312.0,
+   "bf16": 312.0
+  },
+  "int8_tops": 624.0,
+  "bw_gbs": 2039.0,
+  "basis": "datasheet dense (sparsity off)",
+  "sources": [
+   "https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf"
+  ]
+ },
+ {
+  "match": "a100",
+  "device": "NVIDIA A100 (40GB / PCIe)",
+  "tflops": {
+   "fp32": 19.5,
+   "tf32": 156.0,
+   "fp16": 312.0,
+   "bf16": 312.0
+  },
+  "int8_tops": 624.0,
+  "bw_gbs": 1555.0,
+  "basis": "datasheet dense (sparsity off)",
+  "sources": [
+   "https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf"
+  ]
+ },
+ {
+  "match": "h100 pcie",
+  "device": "NVIDIA H100 PCIe",
+  "tflops": {
+   "fp32": 51.2,
+   "tf32": 378.0,
+   "fp16": 756.0,
+   "bf16": 756.0
+  },
+  "int8_tops": 1513.0,
+  "bw_gbs": 2039.0,
+  "basis": "datasheet dense",
+  "sources": [
+   "https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-h100-datasheet"
+  ]
+ },
+ {
+  "match": "h100",
+  "device": "NVIDIA H100 SXM",
+  "tflops": {
+   "fp32": 67.0,
+   "tf32": 494.7,
+   "fp16": 989.4,
+   "bf16": 989.4
+  },
+  "int8_tops": 1978.9,
+  "bw_gbs": 3350.0,
+  "basis": "datasheet dense (sparsity off)",
+  "sources": [
+   "https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-h100-datasheet"
+  ]
+ },
+ {
+  "match": "4090",
+  "device": "NVIDIA GeForce RTX 4090",
+  "tflops": {
+   "fp32": 82.6,
+   "tf32": 82.6,
+   "fp16": 165.2,
+   "bf16": 165.2
+  },
+  "int8_tops": 660.6,
+  "bw_gbs": 1008.0,
+  "basis": "Ada whitepaper dense; GeForce locks fp32 accumulation to half rate (fp16 acc full rate 330.3)",
+  "sources": [
+   "https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf"
+  ]
+ },
+ {
+  "match": "2060",
+  "device": "NVIDIA GeForce RTX 2060 (Turing TU106)",
+  "tflops": {
+   "fp32": 6.52,
+   "fp16": 25.8
+  },
+  "int8_tops": 103.2,
+  "bw_gbs": 336.0,
+  "basis": "tensor fp16-acc full rate 51.6, fp32-acc halved (cuBLAS defaults to fp32 acc -> 25.8); bf16 has no tensor-core support and takes the vector path",
+  "sources": [
+   "https://images.nvidia.com/aem-dam/en-zz/Solutions/design-visualization/technologies/turing-architecture/NVIDIA-Turing-Architecture-Whitepaper.pdf"
+  ]
+ },
+ {
+  "match": "1660 ti",
+  "device": "NVIDIA GeForce GTX 1660 Ti (Turing TU116, no tensor cores)",
+  "tflops": {
+   "fp32": 5.44,
+   "fp16": 10.87
+  },
+  "int8_tops": 21.7,
+  "bw_gbs": 288.0,
+  "vec_tflops": {
+   "fp32": 5.44,
+   "fp16": 5.44
+  },
+  "vec_packed_tflops": {
+   "fp16": 10.87
+  },
+  "basis": "GTX 16-series has no tensor cores: GEMM and vector workloads both run on CUDA cores; fp16 gets 2x fp32 via half2 packing (1536 SP @ 1.77 GHz); int8 is DP4A at 4x fp32; tflops shares the vec_packed source; vec_tflops follows torch opmath fp32 semantics, bf16 has no native support and is left empty",
+  "sources": [
+   "https://www.nvidia.com/en-us/geforce/graphics-cards/gtx-1660-ti/"
+  ]
+ },
+ {
+  "match": "mi300x",
+  "device": "AMD Instinct MI300X",
+  "tflops": {
+   "fp32": 163.4,
+   "tf32": 654.7,
+   "fp16": 1307.4,
+   "bf16": 1307.4
+  },
+  "int8_tops": 2614.8,
+  "bw_gbs": 5325.0,
+  "basis": "datasheet dense",
+  "sources": [
+   "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/AMD-Instinct-MI300X-Data-Sheet.pdf"
+  ]
+ },
+ {
+  "match": "mi250x",
+  "device": "AMD Instinct MI250X",
+  "tflops": {
+   "fp32": 47.9,
+   "fp16": 382.8,
+   "bf16": 382.8
+  },
+  "int8_tops": 765.6,
+  "bw_gbs": 3276.0,
+  "basis": "datasheet dense",
+  "sources": [
+   "https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/AMD-Instinct-MI250-Data-Sheet.pdf"
+  ]
+ },
+ {
+  "match": "orin",
+  "device": "NVIDIA Jetson AGX Orin (Ampere iGPU)",
+  "tflops": {
+   "fp16": 68.75
+  },
+  "int8_tops": 137.5,
+  "bw_gbs": 204.8,
+  "basis": "int8 dense = half of the official 275 sparse TOPS; fp16 derived from the Ampere int8:fp16 = 2:1 ratio; no official fp32 figure",
+  "sources": [
+   "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  ]
+ },
+ {
+  "match": "8060s",
+  "device": "AMD Radeon 8060S (Strix Halo iGPU, 40 CU RDNA3.5)",
+  "tflops": {
+   "fp32": 29.7
+  },
+  "bw_gbs": 256.0,
+  "basis": "fp32 = 40 CU*128 SP*2*2.9 GHz derived; matrix peak unpublished (the NPU carries the AI story); bw = LPDDR5X-8000 256-bit",
+  "sources": [
+   "https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series.html"
+  ]
+ }
+]

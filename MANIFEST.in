@@ -1,0 +1,4 @@
+include torchpeak/peaks.json
+include torchpeak/locales/*.json
+include README.md
+include LICENSE

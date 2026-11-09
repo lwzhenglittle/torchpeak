@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+# 运行产物（bench JSON/HTML）不入库
+results/
+# 本地峰值表覆盖
+my-peaks.json
+# pip install -e . 生成
+torchpeak.egg-info/
+*.egg-info/

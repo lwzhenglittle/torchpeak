@@ -1,0 +1,53 @@
+name: smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch + torchpeak)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . --no-deps
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Smoke run (all built-in test types)
+        run: |
+          python -m torchpeak --device cpu --quick --amp fp32 \
+            --tests probe,gemm,vec,bandwidth,memory_wall,resnet,train,gpt,llama,moe,decode \
+            --train-models bert_base --train-bs 1 --new-tokens 1 \
+            --no-compare-compile --min-time 0.05 --cooldown 0 --label ci
+      - name: Validate report contract
+        run: |
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+
+          d = json.load(open("results/bench_ci.json"))
+          assert d["meta"]["format_version"] == 2
+          assert d["meta"]["errors"]["internal"] == 0
+          probes = [r for r in d["results"] if r["test"] == "probe"]
+          assert probes and any(r.get("status") == "pass" for r in probes)
+          assert d["meta"]["usability"]["total"] == len(probes)
+          expected = {
+              "gemm", "gemv", "gemm_int8", "gemv_int8", "vec_flops", "bandwidth",
+              "memory_wall", "resnet50_infer", "train", "gpt_train", "gpt_prefill",
+              "llama_prefill", "llama_decode", "moe_train", "gpt_decode",
+          }
+          for test in expected:
+              assert any(r["test"] == test and r.get("value") is not None for r in d["results"]), test
+          mountain = next(r for r in d["results"] if r["test"] == "memory_wall")
+          assert mountain["value_basis"] == "largest working set, stride 1"
+          assert mountain["value"] == mountain["mountain"]["gbs"][-1][0]
+          assert Path("results/bench_ci.html").is_file()
+          print(f"probe pass rate: {d['meta']['usability']['pass_rate_pct']}%")
+          print(f"validated {len(expected)} built-in benchmark groups")
+          EOF
