@@ -116,7 +116,10 @@ OOM 时自动减半 batch；可选项 `--hf-model` 用真实 HF 权重补一行�
 - **编译时间分冷/热**：清空 inductor 缓存目录测冷启动，二次编译测热缓存。
 - **数值双口径**：compile 结果同时对照 eager 同精度输出与 fp32 参考，容差按精度分档
   （fp32 1e-4 / fp16 2e-2 / bf16 5e-2）；双侧同 NaN 通过并单独计数
-  （`numerical_nan_outputs`）。
+  （`numerical_nan_outputs`）。低精度下 eager vs compile 的硬检查额外允许"eager 自身到
+  fp32 参考的距离"作为噪声地板（`numerical_eager_noise_floor`）：eager 与编译内核各自
+  累积独立量化噪声，大模型全词表 logits 上少数元素的互差可超过基础容差——真正的
+  编译错误仍会以数量级超出地板。
 - **dynamo 计数器差分**：前后快照 `torch._dynamo` 的 graph_breaks / unique_graphs /
   frames_total / frames_ok，作为编译器覆盖度的量化指标。
 - **加速比**：compile 行写 `speedup_vs_eager`，< 1.0 标记 `compile_regress`——

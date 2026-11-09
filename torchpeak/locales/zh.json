@@ -37,6 +37,8 @@
  "{n} internal error(s) found, see the error/error_kind fields in the JSON": "发现 {n} 个内部错误，详见 JSON error/error_kind 字段",
  "strict-errors mode: {n} failed/unsupported row(s)": "严格错误模式：发现 {n} 个失败/不支持项",
  "numerical check tensor count mismatch: {got} != {want}": "数值检查张量数量不同：{got} != {want}",
+ "numerical check shape mismatch: {got} != {want}": "数值检查形状不同：{got} != {want}",
+ "numerical check failed: diff {diff} > allowed {allowed} (atol {atol} + rtol {rtol}*|ref| + eager noise floor {floor})": "数值检查失败：diff {diff} > 允许值 {allowed}（atol {atol} + rtol {rtol}*|ref| + eager 噪声地板 {floor}）",
  "  {config}: OOM, retrying the whole pair at scale {scale}": "  {config}: OOM，降到 scale {scale} 重试整对测试",
  "  {name}: bs{bs} OOM, halving to bs{halved} and retrying": "  {name}: bs{bs} OOM，降到 bs{halved} 重试",
  "triton unavailable (platform without a native Triton backend)": "triton 不可用（无原生 Triton 后端的平台）",

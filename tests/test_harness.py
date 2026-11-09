@@ -34,6 +34,28 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             compare_numerics(reference, candidate, "fp32")
 
+    def test_numerics_noise_floor(self):
+        from torchpeak.i18n import set_language
+        set_language("en")
+        try:
+            # fp16 noise floor: diff within atol+rtol*|ref|+floor passes, beyond it fails
+            ref = [torch.tensor([1.0, 2.0], dtype=torch.float16)]
+            cand = [torch.tensor([1.5, 2.3], dtype=torch.float16)]  # diffs 0.5/0.3
+            max_abs, _, _, _ = compare_numerics(ref, cand, "fp16", noise=[0.5])
+            self.assertAlmostEqual(max_abs, 0.5, places=5)
+            cand[0][0] = 3.0  # diff 2.0 >> atol 0.1 + rtol*1 + floor 0.5
+            with self.assertRaises(AssertionError) as ctx:
+                compare_numerics(ref, cand, "fp16", noise=[0.5])
+            self.assertIn("noise floor", str(ctx.exception))
+        finally:
+            set_language("auto")
+
+    def test_numerics_noise_floor_still_catches_nan_mismatch(self):
+        ref = [torch.tensor([1.0, float("nan")], dtype=torch.float16)]
+        cand = [torch.tensor([1.0, 2.0], dtype=torch.float16)]
+        with self.assertRaises(AssertionError):
+            compare_numerics(ref, cand, "fp16", noise=[10.0])
+
     def test_error_classification_and_summary(self):
         self.assertEqual(classify_error(NameError("F")), "internal")
         self.assertEqual(classify_error(NotImplementedError()), "unsupported")

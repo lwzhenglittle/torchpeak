@@ -248,16 +248,41 @@ def coefficient_variation(values):
     return statistics.stdev(values) / mean * 100 if mean else 0.0
 
 
-def compare_numerics(reference, candidate, amp):
+def compare_numerics(reference, candidate, amp, noise=None):
+    """Hard equality gate between paired outputs. `noise` is an optional per-tensor floor
+    (the eager side's own distance to the fp32 reference): under low precision, eager and compile
+    each accumulate independent quantization noise, so their mutual deviation is allowed to reach
+    the standard tolerance plus that floor — while a genuinely broken compile (garbage output)
+    still exceeds it by an order of magnitude."""
     tolerances = {"fp32": (1e-4, 1e-4), "fp16": (2e-2, 1e-1), "bf16": (5e-2, 5e-1)}
     rtol, atol = tolerances[amp]
     if len(reference) != len(candidate):
         raise AssertionError(t("numerical check tensor count mismatch: {got} != {want}",
-                               got=len(reference), want=len(candidate)))
+                               got=len(candidate), want=len(reference)))
+    if noise is not None and len(noise) != len(reference):
+        raise AssertionError(t("numerical check tensor count mismatch: {got} != {want}",
+                               got=len(noise), want=len(reference)))
     max_abs, max_rel = 0.0, 0.0
-    for ref, out in zip(reference, candidate):
-        torch.testing.assert_close(out, ref, rtol=rtol, atol=atol, equal_nan=True)  # matching NaNs on both sides count as equal
+    for i, (ref, out) in enumerate(zip(reference, candidate)):
+        floor = noise[i] if noise else 0.0
         ref_float, out_float = ref.detach().float(), out.detach().float()
+        if floor:
+            if ref_float.shape != out_float.shape:
+                raise AssertionError(t("numerical check shape mismatch: {got} != {want}",
+                                       got=tuple(out_float.shape), want=tuple(ref_float.shape)))
+            diff = (out_float - ref_float).abs()
+            allowed = atol + rtol * ref_float.abs() + floor
+            bad = (diff > allowed) | (torch.isnan(ref_float) != torch.isnan(out_float)) \
+                | (torch.isinf(ref_float) != torch.isinf(out_float))  # NaN<->NaN passes; opposite-sign inf exceeds via diff
+            if bad.any():
+                j = bad.reshape(-1).nonzero()[0].item()
+                raise AssertionError(t(
+                    "numerical check failed: diff {diff} > allowed {allowed} "
+                    "(atol {atol} + rtol {rtol}*|ref| + eager noise floor {floor})",
+                    diff=diff.reshape(-1)[j].item(), allowed=allowed.reshape(-1)[j].item(),
+                    atol=atol, rtol=rtol, floor=floor))
+        else:
+            torch.testing.assert_close(out, ref, rtol=rtol, atol=atol, equal_nan=True)  # matching NaNs on both sides count as equal
         diff = (out_float - ref_float).abs()
         if diff.numel():
             max_abs = max(max_abs, diff.max().item())
@@ -378,7 +403,13 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
         compile_hot = time.perf_counter() - t0
         del hot_step, hot_check
 
-        max_abs, max_rel, rtol, atol = compare_numerics(reference, candidate, a.amp)
+        # eager-vs-compile gate with the eager side's own fp16 noise as an extra allowance:
+        # both sides accumulate independent quantization noise vs the fp32 reference
+        noise = None
+        if fp32_ref is not None:
+            noise = [(r.detach().float() - g.detach().float()).abs().max().item()
+                     for r, g in zip(reference, fp32_ref)]
+        max_abs, max_rel, rtol, atol = compare_numerics(reference, candidate, a.amp, noise=noise)
         has_nan = any(torch.isnan(t).any().item() for t in reference
                       if torch.is_tensor(t) and t.is_floating_point())
         fp32_abs = fp32_rel = None
@@ -448,6 +479,7 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
                 row["numerical_vs_fp32"] = fp32_status
                 row["numerical_fp32_max_abs_error"] = fp32_abs
                 row["numerical_fp32_max_rel_error"] = fp32_rel
+                row["numerical_eager_noise_floor"] = round(max(noise), 6)
             if enabled:
                 row["compile_cold_s"] = round(compile_cold, 3)
                 row["compile_hot_s"] = round(compile_hot, 3)
