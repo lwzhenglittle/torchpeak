@@ -172,6 +172,21 @@ torch.compile，记录加速比、冷/热编译时间、显存、数值双口径
 系统语言自动决定（中/英）。快速开始：`pip install -e . && torchpeak --quick`。
 
 ## Contributing
+### Submit your results
+
+Run the default suite on your device and PR the JSON into `results/community/` — one file per
+device, named after it (`gtx1660ti.json`, `arc-b390.json`, `a100-sxm4-80gb.json`; append `-tuned`
+for `--tuned` runs). Use a device-only label:
+
+```bash
+python -m torchpeak --label gtx1660ti            # full default suite
+```
+
+Commit only the JSON (HTML regenerates from it); `scripts/validate_result.py` runs in CI and
+checks schema, filename and size. Measured values from these files feed `peaks.json` entries
+(`basis: "measured, see results/community/<file>"`) — a result PR plus a peak-table entry in the
+same PR is the ideal contribution. Compare across machines with
+`python -m torchpeak --compare results/community/a.json results/community/b.json`.
 
 - Peak-table corrections (new devices, wrong specs) are plain JSON PRs against `peaks.json`.
 - Vendor submissions are welcome and must be labelled: put `--tuned` results in a separate file and

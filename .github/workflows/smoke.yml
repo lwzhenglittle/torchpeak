@@ -25,6 +25,8 @@ jobs:
             --tests probe,gemm,vec,bandwidth,memory_wall,resnet,train,gpt,llama,moe,decode \
             --train-models bert_base --train-bs 1 --new-tokens 1 \
             --no-compare-compile --min-time 0.05 --cooldown 0 --label ci
+      - name: Validate community results
+        run: python scripts/validate_result.py results/community/*.json
       - name: Validate report contract
         run: |
           python - <<'EOF'
