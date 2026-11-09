@@ -40,8 +40,9 @@ report written to results/bench_<host>_<device>.html
 When it finishes:
 
 - open `results/bench_<host>_<device>.html` — a self-contained report (usability matrix,
-  efficiency bars, memory-mountain heatmap, compile-speedup table); a
-  [sample from a GTX 1660 Ti](results/samples/bench_gtx1660ti.html) is in the repo
+  efficiency bars, memory-mountain heatmap, compile-speedup table); a real
+  [GTX 1660 Ti run](results/community/gtx1660ti.json) is in the community corpus (JSON —
+  the HTML report regenerates from it)
 - `results/bench_<host>_<device>.json` — machine-readable rows with per-row trials,
   efficiency fields and raw errors (`meta.format_version` marks the schema)
 
