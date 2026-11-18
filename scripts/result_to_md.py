@@ -63,6 +63,8 @@ def cell(row):
         return f"compile ×{row['speedup_vs_eager']:g}"
     if row.get("numerical_check") in (False, "fail"):
         return "numerical mismatch"
+    if row.get("cache_resident"):
+        return "L2-resident (cache bandwidth)"
     return ""
 
 
