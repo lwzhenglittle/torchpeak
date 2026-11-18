@@ -1,5 +1,6 @@
 """torchpeak.runtime — see the package root docstring."""
 import atexit
+import contextlib
 import importlib.metadata
 import os
 import platform
@@ -15,9 +16,68 @@ AMP = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}
 
 
 # ---------------------------------------------------------------- device helpers
+# Device types whose legacy `torch.<type>` module is an internal/deprecated shim with no usable
+# synchronize/memory hooks (TorchTPU on PyTorch >= 2.11 raises when those are called). Those go
+# through torch.accelerator; every other backend keeps its existing torch.<type> path.
+ACCELERATOR_ONLY = {"tpu"}
+
+
+def _accelerator(dev):
+    """torch.accelerator if `dev` is the current accelerator; None for legacy backends or old torch."""
+    if dev.type not in ACCELERATOR_ONLY:
+        return None
+    acc = getattr(torch, "accelerator", None)
+    if acc is None or not hasattr(acc, "current_accelerator"):
+        return None
+    try:
+        cur = acc.current_accelerator()
+    except Exception:
+        return None
+    return acc if cur is not None and cur.type == dev.type else None
+
+
+def select_device(dev):
+    """Make `dev` the current accelerator device. Accelerator-routed hooks (synchronize, peak memory,
+    empty_cache) take no index, so an explicit --device tpu:1 must also move the current index."""
+    acc = _accelerator(dev)
+    if acc is None or dev.index is None:
+        return
+    try:
+        if acc.current_device_index() != dev.index:
+            acc.set_device_index(dev.index)
+    except Exception:
+        pass
+
+
+def _pkg_version(name):
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 def pick_device(name):
     if name != "auto":
         return torch.device(name)
+    # torch.accelerator knows out-of-tree backends registered as PrivateUse1 (e.g. TPU), which the
+    # per-vendor probes below cannot see. On machines with several accelerators it also encodes
+    # PyTorch's own notion of the current one, which is what "auto" should mean.
+    acc = getattr(torch, "accelerator", None)
+    if acc is not None and hasattr(acc, "current_accelerator"):
+        try:
+            if acc.is_available():
+                current = acc.current_accelerator()
+                if current is not None and current.type != "cpu":
+                    return torch.device(current.type, current.index)
+        except Exception:
+            pass
+    tpu = getattr(torch, "tpu", None)
+    if tpu is not None:  # TorchTPU on a torch too old for torch.accelerator (its is_available raises on >= 2.11)
+        try:
+            if tpu.is_available():
+                return torch.device("tpu")
+        except Exception:
+            pass
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch, "xpu") and torch.xpu.is_available():
@@ -37,16 +97,30 @@ def pick_device(name):
 
 
 def mod(dev):
-    return getattr(torch, dev.type, None)  # torch.cuda / torch.xpu / torch.mps / torch.cpu
+    return getattr(torch, dev.type, None)  # torch.cuda / torch.xpu / torch.mps / torch.cpu / torch.tpu
 
 
 def sync(dev):
+    acc = _accelerator(dev)
+    if acc is not None:
+        try:
+            acc.synchronize()
+            return
+        except Exception:
+            pass  # fall through to the legacy hook so the failure surfaces instead of hiding it
     m = mod(dev)
     if m is not None and hasattr(m, "synchronize"):
         m.synchronize()
 
 
 def reset_peak(dev):
+    acc = _accelerator(dev)
+    if acc is not None and hasattr(acc, "reset_peak_memory_stats"):
+        try:
+            acc.reset_peak_memory_stats()
+            return
+        except Exception:
+            pass
     m = mod(dev)
     if m is not None and hasattr(m, "reset_peak_memory_stats"):
         try:
@@ -56,33 +130,61 @@ def reset_peak(dev):
 
 
 def peak_gb(dev):
-    m = mod(dev)
-    if m is not None and hasattr(m, "max_memory_allocated"):
-        try:
-            return round(m.max_memory_allocated() / 1e9, 2)
-        except Exception:
-            return None
+    for m in (_accelerator(dev), mod(dev)):
+        if m is not None and hasattr(m, "max_memory_allocated"):
+            try:
+                return round(m.max_memory_allocated() / 1e9, 2)
+            except Exception:
+                return None
     return None
 
 
 def peak_reserved_gb(dev):
     """Caching-allocator reserved bytes; on iGPU/UMA this diverges a lot from allocated, so record both."""
-    m = mod(dev)
-    if m is not None and hasattr(m, "max_memory_reserved"):
-        try:
-            return round(m.max_memory_reserved() / 1e9, 2)
-        except Exception:
-            return None
+    for m in (_accelerator(dev), mod(dev)):
+        if m is not None and hasattr(m, "max_memory_reserved"):
+            try:
+                return round(m.max_memory_reserved() / 1e9, 2)
+            except Exception:
+                return None
     return None
 
 
 def empty_cache(dev):
-    m = mod(dev)
-    if m is not None and hasattr(m, "empty_cache"):
-        try:
-            m.empty_cache()
-        except Exception:
-            pass
+    for m in (_accelerator(dev), mod(dev)):
+        if m is not None and hasattr(m, "empty_cache"):
+            try:
+                m.empty_cache()
+                return
+            except Exception:
+                return
+
+
+def fp32_precision_modes(dev):
+    """TPU has no fp32 matmul unit: float32 matmuls are MXU passes, and the stack default ("medium")
+    is a single bf16 pass (roughly the bf16 rate). The primary fp32 row therefore runs at "highest"
+    (6-pass, ~IEEE-32 accuracy, ~1/6 of the bf16 rate) and an additional row records the default.
+    Other backends have a real fp32 unit, so they keep a single row."""
+    return ("highest", "medium") if dev.type == "tpu" else (None,)
+
+
+def default_matmul_precision(dev):
+    """Precision the stack uses when torchpeak does not override it."""
+    return "medium" if dev.type == "tpu" else None
+
+
+@contextlib.contextmanager
+def matmul_precision(mode):
+    """Scope torch.set_float32_matmul_precision for one measurement; mode=None is a no-op."""
+    if not mode:
+        yield
+        return
+    prev = torch.get_float32_matmul_precision()
+    torch.set_float32_matmul_precision(mode)
+    try:
+        yield
+    finally:
+        torch.set_float32_matmul_precision(prev)
 
 
 def device_info(dev):
@@ -106,6 +208,22 @@ def device_info(dev):
                         compute_units=getattr(p, "max_compute_units", None),
                         last_level_cache_mb=round(getattr(p, "last_level_cache_size", 0) / 2 ** 20, 1),
                         is_integrated_gpu=getattr(p, "is_integrated_gpu", None))
+        elif dev.type == "tpu":
+            index = dev.index
+            if index is None:
+                acc = _accelerator(dev)
+                index = acc.current_device_index() if acc is not None else None
+            p = torch.tpu.get_device_properties(index)
+            props = {k: getattr(p, k, None) for k in (
+                "name", "devices_per_chip", "hbm_bytes_per_chip", "hbm_bytes_per_device",
+                "bf16_flops_per_chip", "bf16_flops_per_device", "sparse_cores_per_device",
+                "sparse_core_simd_width", "topology", "version")}
+            props = {k: v for k, v in props.items() if v is not None}
+            mem = props.get("hbm_bytes_per_device") or props.get("hbm_bytes_per_chip")
+            info.update(device_index=index, name=props.get("name", "TPU"),
+                        total_mem_gb=round(mem / 1e9, 1) if mem else None,
+                        backend="torch_tpu " + (_pkg_version("torch_tpu") or "unknown"),
+                        compute_units=None, device_properties=props)
         elif dev.type in ("npu", "musa"):
             m = mod(dev)
             index = dev.index if dev.index is not None else m.current_device()
@@ -302,7 +420,7 @@ def _shim_cleanup():
 
 def runtime_info():
     packages = {}
-    for name in ("torchvision", "transformers", "torch_npu", "torch_musa"):
+    for name in ("torchvision", "transformers", "torch_npu", "torch_musa", "torch_tpu", "libtpu"):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -338,7 +456,13 @@ def runtime_info():
     except OSError:
         pass
     relevant_env = {k: v for k, v in os.environ.items()
-                    if k.startswith(("TORCH", "TRITON", "ZE_", "ONEAPI", "NEO", "HIP", "MIOPEN", "XPU"))}
+                    if k.startswith(("TORCH", "TRITON", "ZE_", "ONEAPI", "NEO", "HIP", "MIOPEN", "XPU",
+                                     "XLA", "LIBTPU", "TPU_"))}
+    eager_mode = None
+    try:
+        eager_mode = str(torch.tpu.eager_mode)
+    except Exception:
+        pass
     return {
         "torch_git": torch.version.git_version,
         "cuda": torch.version.cuda,
@@ -346,6 +470,7 @@ def runtime_info():
         "xpu": getattr(torch.version, "xpu", None),
         "npu": getattr(torch.version, "npu", None),
         "musa": getattr(torch.version, "musa", None),
+        "tpu": getattr(torch.version, "tpu", None),
         "triton": triton_version,
         "packages": packages,
         "ocloc_path": ocloc_path,
@@ -353,6 +478,8 @@ def runtime_info():
         "ocloc_version": ocloc_version,
         "cuda_driver": cuda_driver,
         "cpu_governor": cpu_governor,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "tpu_eager_mode": eager_mode,
         "relevant_env": relevant_env,
         "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
         "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,

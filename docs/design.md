@@ -109,20 +109,22 @@ Enabled by default (`--no-compare-compile` disables it; `--compile` runs the com
 
 ## Device abstraction and backend adaptation
 
-- `runtime.pick_device` selects a backend by availability (`--device` explicitly overrides); operations such as synchronization, peak-VRAM accounting, and cache clearing are dispatched via `mod(dev)` to `torch.cuda / torch.xpu / torch.mps / torch.cpu`, degrading safely when a capability is missing (returning None instead of crashing).
+- `runtime.pick_device` selects a backend by availability (`--device` explicitly overrides). When `torch.accelerator` is available it is consulted first (it is the only thing that sees out-of-tree backends registered as PrivateUse1, e.g. TorchTPU's `tpu`), then the per-vendor probes. Synchronization, peak-memory accounting, and cache clearing go through `mod(dev)` to `torch.cuda / torch.xpu / torch.mps / torch.cpu` and degrade safely when a capability is missing (returning None instead of crashing); device types whose legacy module is an internal/deprecated shim (TPU on PyTorch >= 2.11, where `torch.tpu.synchronize` raises) route through `torch.accelerator.*` instead.
 - On UMA / iGPU the caching allocator's reserved and allocated figures diverge widely, so both are recorded.
 - **XPU ocloc shim**: when generating zebin, Triton-XPU spawns a subprocess under the bare name `ocloc`, while some distributions ship only `ocloc-<ver>`; before the run, a symlink is created in a user-level temp directory and added to PATH, then cleaned up via `atexit` (including on SIGTERM).
 - ROCm attaches through the `cuda` device type; MPS / NPU / MUSA go through the same abstraction, with code paths ready pending hardware verification.
+- **TPU (TorchTPU)**: `torch.compile` must name the registered `tpu` Dynamo backend, so compile calls carry a backend per device and Inductor-only `--compile-mode` values are ignored with a note. A TPU has no native fp32 matmul unit, so fp32 GEMM is measured twice (primary `highest` = 6 bf16 MXU passes, additional `medium` = the stack default), each row carrying `matmul_precision` and divided by `spec.tflops_fp32_mode[mode]`; model rows run at `highest` and the policy is recorded in `meta.matmul_precision`. The spec denominator is derived from `torch.tpu.get_device_properties()` (`bf16_flops_per_device`, `hbm_bytes_per_device`) rather than the static table. Paths that do not exist on TPU (Triton, `torch._int_mm`, CUDA SDPA kernels, `GradScaler`, pinned host memory) are recorded as `skipped`/`unsupported`; skipped probes are excluded from the usability pass rate. One process benchmarks one TPU device, so the default label includes the device index.
 
 **Portability contract.** The main tests are pure torch operators plus the standard per-backend
 module interface — any backend that implements the torch device API can run them. Auto-detection
-probes `torch.cuda/xpu/mps.is_available()` and lazy-imports `torch_npu` / `torch_musa`, falling
-back to CPU. Missing backend-specific capabilities degrade to recorded error rows rather than a
-crashed run: no Triton target fails only the `vec` triton-native row (torch rows unaffected), a
-missing `torch._int_mm` or SDPA backend only marks the matching probe, and where Inductor is
-unavailable the compile rows error while eager rows still run. Integrating a brand-new device type
-(beyond the six built in) is one line in `pick_device` plus an optional `peaks.json` entry —
-without a peak entry the run degrades to the measured-ceiling denominator.
+asks `torch.accelerator` for the current accelerator first, then probes `torch.cuda/xpu/mps.is_available()`
+and lazy-imports `torch_npu` / `torch_musa`, falling back to CPU. Missing backend-specific capabilities
+degrade to recorded error rows rather than a crashed run: no Triton target fails only the `vec`
+triton-native row (torch rows unaffected), a missing `torch._int_mm` or SDPA backend only marks the
+matching probe, and where Inductor is unavailable the compile rows fail while eager rows still run.
+Integrating a brand-new device type (beyond the built-in set) is a `pick_device` branch plus, when
+the backend's legacy module is unusable, a line in `runtime.ACCELERATOR_ONLY`; a peak table entry is
+optional — TPU derives its own spec, everything else degrades to the measured-ceiling denominator.
 
 ## Reproducibility conventions
 
@@ -136,6 +138,7 @@ without a peak entry the run degrades to the measured-ceiling denominator.
 - [ ] Should the default configuration allow one-line conventional optimizations such as channels_last and TF32 (currently assigned to the `--tuned` track).
 - [ ] Peak-table data sources: vendor specs + measured ceiling are already reported side by side — should a self-measured microbenchmark ceiling be added as a third denominator.
 - [ ] Hardware verification for the MPS / NPU / MUSA backends and completion of their peak-table entries.
+- [ ] Hardware verification for TPU/TorchTPU (sync, peak-memory semantics, fp32 `highest` scaling) on a v5e/v6e slice.
 - [ ] Whether edge-device thermal throttling and power modes should be recorded in meta as factors affecting sustained performance (currently platform info is recorded, but clocks are not locked).
 
 ## Sources
@@ -144,5 +147,7 @@ without a peak entry the run degrades to the measured-ceiling denominator.
 - [AMD ROCm blog: PyTorch ecosystem and AISWHUD](https://rocm.blogs.amd.com/artificial-intelligence/pytorch-amd-gpus/README.html)
 - [PyTorch 2.7 Intel GPUs](https://pytorch.org/blog/pytorch-2-7-intel-gpus/)
 - [MLPerf Training v6.0 release](https://www.hpcwire.com/?p=191729)
+- [PyTorch on Cloud TPU (TorchTPU)](https://docs.cloud.google.com/tpu/docs/pytorch-on-tpu)
+- [TorchTPU numerical precision: fp32 as MXU passes](https://torchtpu.readthedocs.io/en/latest/numerical_precision/)
 - [The Decoder: MLPerf Inference v6.0 comparability](https://the-decoder.com/?p=33904)
 - [ROCm in 2026 (DEV)](https://dev.to/pickuma/rocm-in-2026-why-pytorch-on-the-rx-7900-xtx-still-falls-short-for-research-1apa)

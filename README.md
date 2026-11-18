@@ -4,8 +4,8 @@
 and eager-vs-`torch.compile` A/B — each number normalized to the hardware's peak rate.**
 
 torchpeak runs an identical, fully synthetic workload set on NVIDIA (CUDA), AMD (ROCm), Intel (XPU),
-Apple (MPS), Huawei Ascend (NPU), Moore Threads (MUSA), CPU — or any other backend that
-implements the torch device API — and reports throughput two ways: absolute
+Apple (MPS), Huawei Ascend (NPU), Moore Threads (MUSA), Google TPU (TorchTPU), CPU — or any other
+backend that implements the torch device API — and reports throughput two ways: absolute
 (TFLOPS / GB/s / img/s / tok/s) and **efficiency = measured / hardware peak**, using two denominators
 (vendor spec table *and* this run's measured ceiling) so results stay comparable even where specs
 are missing or optimistic. Tests are layered — usability probes → operator microbenchmarks → whole
@@ -113,11 +113,23 @@ reference, with per-dtype tolerances. Identical NaN on both sides passes and is 
   reason — the 16 MiB (L2-regime) row can exceed the ceiling and that gap is the cache effect.
 - GEMV is scored in GB/s over bytes moved (read W + read x + write y), not TFLOPS.
 
+**TPU accounting (TorchTPU, `device="tpu"`).** A TPU has no fp32 matmul unit: float32 and float16
+matmuls are bf16 MXU passes, and the stack default (`medium`) is a *single* pass. torchpeak therefore
+measures every fp32 GEMM twice on TPU — the primary row at `highest` (6 passes, ~IEEE-32 accuracy,
+~1/6 of the bf16 rate) and an additional row at the stack default `medium` — and divides each by its
+own peak (`tflops_fp32_mode`). Both modes, the model-run mode and the stack default are recorded in
+`meta.matmul_precision`. The spec denominator is derived from `torch.tpu.get_device_properties()`
+(`bf16_flops_per_device`, `hbm_bytes_per_device`) instead of a static table entry, so new TPU
+generations need no JSON. Paths that do not exist on TPU (Triton, `torch._int_mm`, CUDA SDPA
+backends, `GradScaler`, host pinned memory) are recorded as `skipped`/`unsupported`; skipped probes
+are excluded from the usability pass rate. `torch.compile` goes through the registered `tpu` Dynamo
+backend (Inductor modes do not apply), and one process benchmarks one TPU device.
+
 ## CLI reference
 
 ```text
---device auto|cuda|xpu|mps|cpu     device selection (default auto)
---amp fp32|fp16|bf16|all           model-test precision (default fp16)
+--device auto|cuda|xpu|tpu|mps|cpu  device selection (default auto)
+--amp fp32|fp16|bf16|all           model-test precision (default fp16, bf16 on TPU)
 --quick                            small sizes, fast smoke run
 --strict / --strict-errors         fixed 7 rounds + IQR / exit 1 on any error row
 --cooldown SEC                     idle seconds between subtests (default 2, 0 disables)
@@ -156,6 +168,7 @@ target, `torch._int_mm`, Inductor) degrade to recorded error rows, not a crashed
 | Intel XPU | tested (Arc B390 iGPU; auto adds a user-level `ocloc` shim when the distro ships only `ocloc-<ver>`, recycled on exit incl. SIGTERM) |
 | CPU | tested (launch path, torch.compile C++ backend, honest per-row errors where the stack can't do fp16 backward) |
 | MPS / NPU / MUSA | code paths present, not yet hardware-verified |
+| Google TPU | TorchTPU (`device="tpu"`): code paths present, not yet hardware-verified (needs a TPU VM / Colab TPU runtime; `torch_xla` is not a target) |
 
 **ROCm-derived vendor stacks (Hygon DCU + DTK, tested).** One failure mode there is not a Python
 exception: Triton can emit LLVM IR the vendor ComGR rejects (LLVM-19+ `nuw` on `getelementptr`

@@ -151,21 +151,34 @@ OOM 时自动减半 batch；可选项 `--hf-model` 用真实 HF 权重补一行�
 
 ## 设备抽象与后端适配
 
-- `runtime.pick_device` 按可用性选择后端（`--device` 显式指定）；同步、峰值显存统计、
-  cache 清理等操作经 `mod(dev)` 分派到 `torch.cuda / torch.xpu / torch.mps / torch.cpu`，
-  能力缺失时安全降级（返回 None 而非崩溃）。
+- `runtime.pick_device` 按可用性选择后端（`--device` 显式指定）。装有 `torch.accelerator` 时
+  优先询问它——只有它能看见以 PrivateUse1 注册的树外后端（如 TorchTPU 的 `tpu`）——再走
+  各厂商探测。同步、峰值显存统计、cache 清理等操作经 `mod(dev)` 分派到
+  `torch.cuda / torch.xpu / torch.mps / torch.cpu`，能力缺失时安全降级（返回 None 而非崩溃）；
+  旧模块已成内部/废弃 shim 的设备类型（PyTorch ≥ 2.11 上的 TPU，`torch.tpu.synchronize` 会抛错）
+  改走 `torch.accelerator.*`。
 - UMA / iGPU 上 caching allocator 的 reserved 与 allocated 差距大，两个口径都记录。
 - **XPU ocloc shim**：Triton-XPU 生成 zebin 时以裸名 `ocloc` 起子进程，而部分发行版只装
   `ocloc-<ver>`；运行前在用户级临时目录建符号链接并入 PATH，`atexit`（含 SIGTERM）回收。
 - ROCm 经 `cuda` device type 接入；MPS / NPU / MUSA 走同一抽象，代码路径就绪待硬件验证。
+- **TPU（TorchTPU）**：`torch.compile` 必须显式指定注册的 `tpu` Dynamo backend，因此编译调用
+  按设备携带 backend，Inductor 专属的 `--compile-mode` 取值会被忽略并提示。TPU 没有原生 fp32
+  矩阵单元，所以 fp32 GEMM 测两遍（主行为 `highest`＝6 趟 bf16 MXU，附加行为栈默认 `medium`），
+  每行带 `matmul_precision` 并各自除以 `spec.tflops_fp32_mode[mode]`；模型行按 `highest` 运行，
+  整个策略写入 `meta.matmul_precision`。规格分母由 `torch.tpu.get_device_properties()`
+  （`bf16_flops_per_device`、`hbm_bytes_per_device`）现场推导，不依赖静态表。TPU 上不存在的
+  路径（Triton、`torch._int_mm`、CUDA SDPA 内核、`GradScaler`、pinned 主机内存）记为
+  `skipped`/`unsupported`，跳过的探针不计入可用性通过率。一进程只基准一个 TPU 设备，
+  默认 label 带设备序号。
 
 **可移植性契约。** 主测试只用 torch 算子和标准的按后端模块接口——任何实现了 torch 设备
-API 的后端都能直接跑。自动检测依次探测 `torch.cuda/xpu/mps.is_available()` 并懒加载
-`torch_npu` / `torch_musa`，全部不可用时兜底 CPU。后端相关能力的缺失降级为记录在案的
-error 行而非崩溃：无 Triton target 只影响 `vec` 的 triton-native 行（torch 行照常），
-`torch._int_mm` 或某个 SDPA 后端缺失只标记对应探针，Inductor 不可用时 compile 行报错、
-eager 行照常。接入全新设备类型（六类之外）只需在 `pick_device` 加一行，外加可选的
-`peaks.json` 条目——无峰值条目时自动退化为实测上限口径。
+API 的后端都能直接跑。自动检测先问 `torch.accelerator` 当前加速器，再依次探测
+`torch.cuda/xpu/mps.is_available()` 并懒加载 `torch_npu` / `torch_musa`，全部不可用时兜底 CPU。
+后端相关能力的缺失降级为记录在案的 error 行而非崩溃：无 Triton target 只影响 `vec` 的
+triton-native 行（torch 行照常），`torch._int_mm` 或某个 SDPA 后端缺失只标记对应探针，
+Inductor 不可用时 compile 行报错、eager 行照常。接入全新设备类型（内置集合之外）只需在
+`pick_device` 加分支，旧模块不可用时再在 `runtime.ACCELERATOR_ONLY` 加一项；峰值条目可选——
+TPU 自行推导规格，其余设备无峰值条目时自动退化为实测上限口径。
 
 ## 复现规范
 
@@ -179,6 +192,7 @@ eager 行照常。接入全新设备类型（六类之外）只需在 `pick_devi
 - [ ] 默认口径是否允许 channels_last、TF32 这类一行常规优化（当前归入 `--tuned` 赛道）。
 - [ ] 峰值表数据来源：厂商规格 + 实测上限并列已落地，是否再自测一份微基准上限作为第三口径。
 - [ ] MPS / NPU / MUSA 后端的硬件验证与峰值表补齐。
+- [ ] TPU/TorchTPU 的硬件验证（同步、峰值显存语义、fp32 `highest` 的 6 趟折算）于 v5e/v6e 切片。
 - [ ] 端侧温控与功耗模式对持续性能的影响是否记录进 meta（当前记录平台信息，不锁频）。
 
 ## Sources
@@ -187,5 +201,7 @@ eager 行照常。接入全新设备类型（六类之外）只需在 `pick_devi
 - [AMD ROCm blog：PyTorch 生态与 AISWHUD](https://rocm.blogs.amd.com/artificial-intelligence/pytorch-amd-gpus/README.html)
 - [PyTorch 2.7 Intel GPUs](https://pytorch.org/blog/pytorch-2-7-intel-gpus/)
 - [MLPerf Training v6.0 发布](https://www.hpcwire.com/?p=191729)
+- [PyTorch on Cloud TPU（TorchTPU）](https://docs.cloud.google.com/tpu/docs/pytorch-on-tpu)
+- [TorchTPU 数值精度：fp32 即 MXU 多趟](https://torchtpu.readthedocs.io/en/latest/numerical_precision/)
 - [The Decoder：MLPerf Inference v6.0 可比性](https://the-decoder.com/?p=33904)
 - [ROCm in 2026（DEV）](https://dev.to/pickuma/rocm-in-2026-why-pytorch-on-the-rx-7900-xtx-still-falls-short-for-research-1apa)

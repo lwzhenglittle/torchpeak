@@ -53,6 +53,13 @@ def row_metric(row):
     return None
 
 
+def measure_key(kind, key, row):
+    """Measured-ceiling key; fp32 rows measured at different matmul precisions are separate ceilings
+    (a TPU 'highest' row and its default 'medium' row are different hardware rates)."""
+    mode = row.get("matmul_precision")
+    return (kind, f"{key}@{mode}" if mode and key else key)
+
+
 def annotate_efficiency(results, spec):
     """Core metric: software efficiency = measured / peak in the same dimension; measured ceilings are
     computed per metric kind and precision. Writes peak_spec / eff_spec_pct / peak_measured / eff_measured_pct in place."""
@@ -60,10 +67,11 @@ def annotate_efficiency(results, spec):
     for r in results:
         m = envelope_metric(r)
         if m:
-            k = (m[0], m[1])
+            k = measure_key(m[0], m[1], r)
             if k not in measured or m[2] > measured[k]:
                 measured[k] = m[2]
     spec_tf = (spec or {}).get("tflops") or {}
+    spec_tf_mode = (spec or {}).get("tflops_fp32_mode") or {}
     spec_int8 = (spec or {}).get("int8_tops")
     spec_bw = (spec or {}).get("bw_gbs")
     spec_host_bw = (spec or {}).get("host_bw_gbs")
@@ -72,6 +80,7 @@ def annotate_efficiency(results, spec):
         if not m:
             continue
         kind, key, value = m
+        mode = r.get("matmul_precision")
         if kind == "tops":
             spec_peak = spec_int8
         elif kind == "device_bw":
@@ -82,9 +91,11 @@ def annotate_efficiency(results, spec):
             spec_peak = (spec or {}).get("vec_tflops", {}).get(key)
         elif kind == "vec_packed":
             spec_peak = (spec or {}).get("vec_packed_tflops", {}).get(key)
+        elif key == "fp32" and mode in spec_tf_mode:
+            spec_peak = spec_tf_mode[mode]
         else:
             spec_peak = spec_tf.get(key)
-        meas_peak = measured.get((kind, key))
+        meas_peak = measured.get(measure_key(kind, key, r))
         if spec_peak:
             r["peak_spec"] = spec_peak
             r["eff_spec_pct"] = round(value / spec_peak * 100, 1)
@@ -115,7 +126,8 @@ def print_efficiency_summary(results, spec):
     for r in results:
         m = envelope_metric(r)
         if m:
-            k = f"{m[0]}:{m[1] or 'all'}"
+            kind, key = measure_key(m[0], m[1], r)
+            k = f"{kind}:{key or 'all'}"
             if k not in best or m[2] > best[k][1]:
                 best[k] = (r, m[2])
     model_rows = [r for r in results if r.get("approx_tflops") is not None or r.get("approx_weight_bw_gbs") is not None]
@@ -215,7 +227,8 @@ def write_html_report(meta, results, path):
     for r in results:
         m = row_metric(r)
         if m and m[0] in EFFICIENCY_KINDS:
-            k = f"{m[0]}:{m[1] or 'all'}"
+            kind, key = measure_key(m[0], m[1], r)
+            k = f"{kind}:{key or 'all'}"
             if k not in best or m[2] > best[k][1]:
                 best[k] = (r, m[2])
     bars = []

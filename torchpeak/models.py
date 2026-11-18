@@ -165,7 +165,8 @@ def test_train(results, dev, a):
                 opt = torch.optim.AdamW(m.parameters(), lr=1e-4)
             m.train()
             cm = tcompile(m, a) if compile_enabled else m
-            scaler = torch.amp.GradScaler(dev.type, enabled=(a.amp == "fp16" and dev.type != "cpu"))
+            scaler = torch.amp.GradScaler(
+                dev.type, enabled=(a.amp == "fp16" and dev.type not in ("cpu", "tpu")))  # TPU: bf16 accumulators, no scaler op
 
             def step():
                 opt.zero_grad(set_to_none=True)
@@ -270,7 +271,8 @@ def test_gpt(results, dev, a):
         m.train()
         cm = tcompile(m, a) if compile_enabled else m
         opt = torch.optim.AdamW(m.parameters(), lr=3e-4)
-        scaler = torch.amp.GradScaler(dev.type, enabled=(a.amp == "fp16" and dev.type != "cpu"))
+        scaler = torch.amp.GradScaler(
+            dev.type, enabled=(a.amp == "fp16" and dev.type not in ("cpu", "tpu")))  # TPU: bf16 accumulators, no scaler op
         x = torch.randint(0, vocab, (bs_eff, T), device=dev)
         y = torch.randint(0, vocab, (bs_eff, T), device=dev)
 

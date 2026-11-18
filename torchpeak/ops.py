@@ -3,8 +3,9 @@ import time
 
 import torch
 from .i18n import t
-from .runtime import AMP, empty_cache, sync, path_failure, path_works
-from .harness import measure, print_row, timeit
+from .runtime import (AMP, empty_cache, fp32_precision_modes, matmul_precision, sync,
+                      path_failure, path_works)
+from .harness import measure, print_row, tcompile, timeit
 
 try:  # optional; kept at module scope so triton's JIT can resolve `tl` from the kernel's globals
     import triton.language as tl
@@ -20,6 +21,14 @@ def _record_unavailable(results, test, config, unit, kind, dtype, what):
                         error_kind="unsupported",
                         error=t("{what} is unusable for {dtype} on this stack: {detail}",
                                 what=what, dtype=dtype, detail=path_failure(kind, dtype))))
+    print_row(results[-1])
+
+
+def _record_skipped(results, test, config, unit, reason):
+    """Record a row that this device class cannot exercise at all (no kernel/library path, not a
+    numerical failure). Kept in the JSON as `skipped` + `error_kind=unsupported`."""
+    results.append(dict(test=test, config=config, value=None, unit=unit, status="skipped",
+                        error_kind="unsupported", error=reason))
     print_row(results[-1])
 
 
@@ -40,19 +49,22 @@ def test_gemm(results, dev, a):
     int8_gemm_selected = gemm_selected or "int8_gemm" in tests
     int8_gemv_selected = gemv_selected or int8_gemm_selected or "gemv_int8" in tests
 
-    def measure_float(test, name, m, k, n, min_time=None):
+    def measure_float(test, name, m, k, n, min_time=None, precision=None):
         min_time = a.min_time if min_time is None else min_time
 
         def run():
             dt = AMP[name]
-            x = torch.randn(m, k, device=dev, dtype=dt)
-            y = torch.randn(k, n, device=dev, dtype=dt)
-            t = timeit(lambda: x @ y, dev, min_time=min_time, warmup=10 if a.strict else 3,
-                       max_iters=10000)
-            return 2 * m * k * n / t / 1e12
+            with matmul_precision(precision):
+                x = torch.randn(m, k, device=dev, dtype=dt)
+                y = torch.randn(k, n, device=dev, dtype=dt)
+                t = timeit(lambda: x @ y, dev, min_time=min_time, warmup=10 if a.strict else 3,
+                           max_iters=10000)
+            value = 2 * m * k * n / t / 1e12
+            return (value, {"matmul_precision": precision}) if precision else value
 
         shape = f"{m}x{n}" if m == k == n else f"m{m} k{k} n{n}"
-        measure(results, dev, test, f"{name} {shape}", "TFLOPS", run, strict=a.strict, repeats=3,
+        config = f"{name} {shape}" + (f" mp={precision}" if precision else "")
+        measure(results, dev, test, config, "TFLOPS", run, strict=a.strict, repeats=3,
                 cooldown=a.cooldown)
 
     def measure_int8(test, m, k, n, min_time=None):
@@ -89,19 +101,32 @@ def test_gemm(results, dev, a):
 
     if gemm_selected:
         for name in ("fp32", "fp16", "bf16"):
-            for m, k, n in shapes:
-                measure_float("gemm", name, m, k, n)
+            # TPU has no fp32 matmul unit: measure the honest 6-pass "highest" rate as the primary
+            # row and the stack default (single bf16 MXU pass) as an additional row.
+            modes = fp32_precision_modes(dev) if name == "fp32" else (None,)
+            for mode in modes:
+                for m, k, n in shapes:
+                    measure_float("gemm", name, m, k, n, precision=mode)
     if gemv_selected:
         # GEMV is bandwidth-bound: report GB/s from bytes moved (read W + read x + write y), not TFLOPS
         for name, dt_size in (("fp32", 4), ("fp16", 2), ("bf16", 2)):
             for m, k, n in gemv_shapes:
                 measure_gemv("gemv", name, m, k, n, dt_size, gemv_min_time)
+    int8_supported = dev.type != "tpu"  # torch._int_mm has no TorchTPU kernel; int8 MXU is a different path
     if int8_gemm_selected:
         for m, k, n in int8_shapes:
-            measure_int8("gemm_int8", m, k, n)
+            if int8_supported:
+                measure_int8("gemm_int8", m, k, n)
+            else:
+                _record_skipped(results, "gemm_int8", f"int8 {m}x{n}", "TOPS",
+                                "torch._int_mm has no TorchTPU kernel (int8 MXU is not reachable through this op)")
     if int8_gemv_selected:
         for m, k, n in int8_gemv_shapes:
-            measure_gemv("gemv_int8", "int8", m, k, n, 1, gemv_min_time)
+            if int8_supported:
+                measure_gemv("gemv_int8", "int8", m, k, n, 1, gemv_min_time)
+            else:
+                _record_skipped(results, "gemv_int8", f"int8 m{m} k{k} n{n}", "GB/s",
+                                "torch._int_mm has no TorchTPU kernel (int8 MXU is not reachable through this op)")
 
 
 def test_vec(results, dev, a):
@@ -130,7 +155,7 @@ def test_vec(results, dev, a):
                     t = t * 1.0001 + 0.0001  # serial dependency; cannot be folded or CSE'd away
                 return t
 
-            f = torch.compile(fma_chain)
+            f = tcompile(fma_chain, a)
             # iGPU DVFS ramp: spin for ~2s first so clocks reach steady state; otherwise a short kernel can vary ±40% (B390: 4.1↔6.8)
             warm_until = time.perf_counter() + max(2.0, a.min_time)
             while time.perf_counter() < warm_until:
@@ -180,6 +205,10 @@ def test_vec(results, dev, a):
                     if r["test"] == "vec_flops" and "triton" not in r["config"] and r.get("value")}
     grid = ((numel + 1023) // 1024,)
     for name in ("fp32", "fp16", "bf16"):
+        if dev.type == "tpu":
+            _record_skipped(results, "vec_flops", f"{name} chain{chain} triton-native", "TFLOPS",
+                            "no Triton backend on TPU (custom kernels are Pallas)")
+            continue
         if packed_kernel is not None and a.path_canary and dev.type == "cuda" and not path_works("triton", name):
             _record_unavailable(results, "vec_flops", f"{name} chain{chain} triton-native", "TFLOPS",
                                 "triton", name, "the native Triton kernel")
@@ -209,7 +238,7 @@ def test_vec(results, dev, a):
 def test_bandwidth(results, dev, a):
     sizes = (16, 512) if a.quick else (16, 1024)  # one L2-resident size + one DRAM size
     ops = ["read", "write", "copy"]
-    if dev.type in ("cuda", "xpu"):
+    if dev.type in ("cuda", "xpu", "tpu"):
         ops += ["h2d", "d2h"]
 
     for size_mib in sizes:

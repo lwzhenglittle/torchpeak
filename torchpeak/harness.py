@@ -9,7 +9,8 @@ import time
 import torch.nn as nn
 import torch
 from .i18n import t
-from .runtime import AMP, empty_cache, peak_gb, peak_reserved_gb, reset_peak, sync
+from .runtime import (AMP, empty_cache, matmul_precision, peak_gb, peak_reserved_gb, reset_peak,
+                      sync)
 
 # ---------------------------------------------------------------- stability policy
 STABLE_CV_PCT = 5.0     # STABLE after outlier handling; above this the row is tagged UNSTABLE
@@ -42,7 +43,8 @@ def mad_outliers(values, cap):
 
 def is_oom(e):
     s = str(e).lower()
-    return "out of memory" in s or "out_of_device_memory" in s or "out_of_host_memory" in s
+    return ("out of memory" in s or "out_of_device_memory" in s or "out_of_host_memory" in s
+            or "resource_exhausted" in s or "resource exhausted" in s or "hbm oom" in s)
 
 
 def classify_error(e):
@@ -76,10 +78,16 @@ def compile_modes(a):
 
 
 def tcompile(m, a):
-    """Compile per --compile-mode; default is torch.compile's default mode."""
-    if getattr(a, "compile_mode", "default") == "default":
-        return torch.compile(m)
-    return torch.compile(m, mode=a.compile_mode)
+    """Compile per --compile-mode; TPU registers its own Dynamo backend ("tpu") and has no Inductor
+    modes, so the mode knob only applies to backends that accept it."""
+    backend = getattr(a, "compile_backend", None)
+    mode = getattr(a, "compile_mode", "default")
+    kw = {}
+    if backend:
+        kw["backend"] = backend
+    if mode != "default" and not backend:
+        kw["mode"] = mode
+    return torch.compile(m, **kw)
 
 
 def compile_config(config, a, enabled):
@@ -363,8 +371,11 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
         try:
             a.amp = "fp32"
             torch.manual_seed(seed)
-            _, fp32_check = make_case(False, scale)
-            fp32_ref = fp32_check()
+            # On TPU the stack default is a single bf16 MXU pass; a "fp32" baseline must use the
+            # 6-pass highest mode or it is not a reference at all.
+            with matmul_precision("highest" if dev.type == "tpu" else None):
+                _, fp32_check = make_case(False, scale)
+                fp32_ref = fp32_check()
             sync(dev)
             del _, fp32_check
             empty_cache(dev)
@@ -380,9 +391,13 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
     sync(dev)
 
     # Dual compile-time scopes: cold = first step with a brand-new Inductor cache dir; hot = first step of recompiling a wrapper in the same dir
+    # TorchTPU does not use Inductor and its tier-1 cache is process-local, so the dir knob is a no-op there.
+    uses_inductor = dev.type != "tpu"
     prev_cache = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
-    cache_dir = tempfile.mkdtemp(prefix="torchpeak_inductor_")
-    os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_dir
+    cache_dir = None
+    if uses_inductor:
+        cache_dir = tempfile.mkdtemp(prefix="torchpeak_inductor_")
+        os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_dir
     dyn_before = dynamo_counters_snapshot()
     try:
         torch.manual_seed(seed)
@@ -483,9 +498,12 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
             if enabled:
                 row["compile_cold_s"] = round(compile_cold, 3)
                 row["compile_hot_s"] = round(compile_hot, 3)
-                row["compile_time_scope"] = ("cold=fresh Inductor cache dir, first step "
-                                             "(includes the check step's backward); "
-                                             "hot=second compile of a wrapper in the same dir, first step")
+                row["compile_time_scope"] = (
+                    "cold=fresh Inductor cache dir, first step (includes the check step's backward); "
+                    "hot=second compile of a wrapper in the same dir, first step" if uses_inductor else
+                    "cold=first compiled call in this process (TorchTPU tier-1 cache is process-local "
+                    "and already warm from the eager reference; no cache-dir knob), first step "
+                    "(includes the check step's backward); hot=fresh wrapper, same process cache")
                 if compile_peak is not None and eager_peak:
                     row["mem_ratio_vs_eager"] = round(compile_peak / eager_peak, 3)
                 row.update(dyn_delta)
@@ -496,5 +514,6 @@ def _measure_compile_pair_once(results, dev, test, config, unit, make_case, scal
             os.environ.pop("TORCHINDUCTOR_CACHE_DIR", None)
         else:
             os.environ["TORCHINDUCTOR_CACHE_DIR"] = prev_cache
-        shutil.rmtree(cache_dir, ignore_errors=True)
+        if cache_dir:
+            shutil.rmtree(cache_dir, ignore_errors=True)
 

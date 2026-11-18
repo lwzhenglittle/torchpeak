@@ -63,9 +63,11 @@ import sys
 import time
 
 import torch
-from .runtime import AMP, device_info, ensure_ocloc_on_path, pick_device, runtime_info
+from .runtime import (AMP, default_matmul_precision, device_info, ensure_ocloc_on_path,
+                      fp32_precision_modes, matmul_precision, pick_device, runtime_info,
+                      select_device)
 from .i18n import available_languages, detect, set_language, t
-from .peaks import load_peak_entries, match_peak
+from .peaks import load_peak_entries, match_peak, tpu_spec
 from .harness import (ESCALATE_CV_PCT, OUTLIER_CAP, STABLE_CV_PCT, error_summary,
                       split_pair_config)
 from .report import annotate_compile_speedup, annotate_efficiency, print_efficiency_summary, write_html_report
@@ -155,9 +157,11 @@ def _argv_lang(argv):
 def main():
     set_language(_argv_lang(sys.argv[1:]) or "auto")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--device", default="auto", help=t("device selection: auto / cuda / xpu / mps / cpu"))
-    p.add_argument("--amp", default="fp16",
-                   help=t("model-test precision: fp32/fp16/bf16, comma-separated or all (default fp16)"))
+    p.add_argument("--device", default="auto",
+                   help=t("device selection: auto / cuda / xpu / tpu / mps / cpu"))
+    p.add_argument("--amp", default=None,
+                   help=t("model-test precision: fp32/fp16/bf16, comma-separated or all "
+                          "(default fp16, bf16 on TPU)"))
     p.add_argument("--quick", action="store_true", help=t("small sizes, fast run"))
     p.add_argument("--strict", action="store_true",
                    help=t("strict mode: fixed 7 rounds, median + IQR dispersion, longer warm-up/timing"))
@@ -213,15 +217,19 @@ def main():
     if a.compare_compile is None:
         a.compare_compile = not a.compile
 
-    amp_names = ["fp32", "fp16", "bf16"] if a.amp == "all" else [v.strip() for v in a.amp.split(",")]
-    if not amp_names or any(v not in AMP for v in amp_names):
-        p.error(t("--amp must be fp32/fp16/bf16, a comma-separated list, or all"))
-    amp_names = list(dict.fromkeys(amp_names))
-
     if a.min_time is None:
         a.min_time = 3.0 if a.strict or a.compare_compile else 1.0
 
     dev = pick_device(a.device)
+    select_device(dev)  # accelerator-routed sync/memory hooks act on the current device index
+    # TPU runs bf16 natively; fp16 there is not a distinct format and GradScaler has no TPU kernel.
+    if a.amp is None:
+        a.amp = "bf16" if dev.type == "tpu" else "fp16"
+    a.compile_backend = "tpu" if dev.type == "tpu" else None
+    amp_names = ["fp32", "fp16", "bf16"] if a.amp == "all" else [v.strip() for v in a.amp.split(",")]
+    if not amp_names or any(v not in AMP for v in amp_names):
+        p.error(t("--amp must be fp32/fp16/bf16, a comma-separated list, or all"))
+    amp_names = list(dict.fromkeys(amp_names))
     ocloc_shim = ensure_ocloc_on_path() if dev.type == "xpu" else None
     try:  # silence torch's internal glog-style ERROR spam (compile failures dump a full screen of traceback); per-row errors still go to JSON
         import logging
@@ -234,15 +242,25 @@ def main():
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             tuned_applied += ["cuda.matmul.allow_tf32=True", "cudnn.allow_tf32=True"]
-        torch.backends.cudnn.benchmark = True
-        tuned_applied.append("cudnn.benchmark=True")
+        if dev.type != "tpu":  # no cuDNN on TPU; its equivalent knobs are precision/eager mode
+            torch.backends.cudnn.benchmark = True
+            tuned_applied.append("cudnn.benchmark=True")
     info = device_info(dev)
-    label = a.label or f"{socket.gethostname()}_{dev.type}"
+    default_label = f"{socket.gethostname()}_{dev.type}"
+    if dev.type == "tpu" and info.get("device_index") is not None:
+        default_label += str(info["device_index"])  # one process per TPU device; keep runs distinct
+    label = a.label or default_label
     meta = dict(format_version=2, label=label, torch=torch.__version__, python=sys.version.split()[0], platform=platform.platform(),
                 amp=a.amp, amp_list=amp_names, quick=a.quick, strict=a.strict, compile=a.compile,
                 compare_compile=a.compare_compile, args=vars(a).copy(), num_threads=torch.get_num_threads(),
                 num_interop_threads=torch.get_num_interop_threads(), runtime=runtime_info(), **info)
     meta["tuned"] = {"enabled": a.tuned, "applied": tuned_applied}
+    meta["matmul_precision"] = {
+        "stack_default": default_matmul_precision(dev) or torch.get_float32_matmul_precision(),
+        "fp32_gemm_modes": [m for m in fp32_precision_modes(dev) if m],
+        "fp32_model_mode": "highest" if (dev.type == "tpu" and "fp32" in amp_names) else None,
+        "applied": [],
+    }
     meta["stability_policy"] = dict(stable_cv_pct=STABLE_CV_PCT, escalate_cv_pct=ESCALATE_CV_PCT,
                                     rounds=[3, 5, 7], outlier_rule="Iglewicz-Hoaglin modified z>3.5",
                                     outlier_cap={str(k): v for k, v in OUTLIER_CAP.items()},
@@ -258,6 +276,9 @@ def main():
         print(t("== ocloc shim: {path} (Triton-XPU needs the bare name ocloc)", path=ocloc_shim))
     if a.tuned:
         print(t("== tuned track enabled: {knobs}", knobs=tuned_applied))
+    if dev.type == "tpu" and a.compile_mode != "default":
+        print(t("== --compile-mode {mode} has no TorchTPU equivalent; using the TPU backend default",
+                mode=a.compile_mode), flush=True)
 
     tests = {TEST_ALIASES.get(name, name) for name in a.tests.split(",")}
     unknown = sorted(tests - KNOWN_TESTS)
@@ -300,8 +321,10 @@ def main():
     if "probe" in tests:
         test_probe(results, dev, a)
         passed = sum(1 for r in results if r["test"] == "probe" and r.get("status") == "pass")
-        total = sum(1 for r in results if r["test"] == "probe")
-        meta["usability"] = {"passed": passed, "total": total,
+        failed = sum(1 for r in results if r["test"] == "probe" and r.get("status") == "fail")
+        skipped = sum(1 for r in results if r["test"] == "probe" and r.get("status") == "skipped")
+        total = passed + failed  # device-inapplicable probes stay in the JSON but not in the pass rate
+        meta["usability"] = {"passed": passed, "total": total, "skipped": skipped,
                              "pass_rate_pct": round(passed / total * 100, 1) if total else None}
     if tests.intersection(("gemm", "gemv", "int8_gemm", "gemv_int8")):
         test_gemm(results, dev, a)
@@ -311,8 +334,8 @@ def main():
         test_bandwidth(results, dev, a)
     if "memory_wall" in tests:
         test_memory_wall(results, dev, a)
-    for amp in amp_names:
-        a.amp = amp
+
+    def run_models():
         if "resnet" in tests:
             test_resnet(results, dev, a)
         if "train" in tests:
@@ -328,8 +351,22 @@ def main():
         if "hf" in tests:
             test_hf_decode(results, dev, a)
 
+    for amp in amp_names:
+        a.amp = amp
+        # TPU: the primary fp32 model rows use the 6-pass "highest" emulation, never the default
+        # single-pass bf16 MXU shortcut (recorded in meta.matmul_precision).
+        precision = "highest" if (dev.type == "tpu" and amp == "fp32") else None
+        with matmul_precision(precision):
+            run_models()
+        if precision:
+            meta["matmul_precision"]["applied"].append({"amp": amp, "mode": precision})
+
     peak_entries, peaks_source = load_peak_entries(a.peaks)
     spec = match_peak(info, peak_entries)
+    if spec is None:
+        spec = tpu_spec(info)  # TPU reports its own bf16 rate + HBM size, so no static entry is needed
+        if spec is not None:
+            peaks_source = peaks_source or t("device properties")
     meta["peaks_source"] = peaks_source
     print(t("== peak table: {source}", source=peaks_source or t("not found; measured-ceiling denominator only")))
     measured = annotate_efficiency(results, spec)

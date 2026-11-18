@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from .runtime import empty_cache, sync
 from .i18n import t
-from .harness import autocast, error_fields
+from .harness import autocast, error_fields, tcompile
 
 # ---------------------------------------------------------------- feature availability matrix
 def test_probe(results, dev, a):
@@ -53,7 +53,7 @@ def test_probe(results, dev, a):
     def compile_step(with_backward):
         def run():
             m = nn.Linear(16, 16).to(dev)
-            cm = torch.compile(m)
+            cm = tcompile(m, a)
             loss = cm(torch.randn(4, 16, device=dev)).sum()
             if with_backward:
                 loss.backward()
@@ -78,10 +78,27 @@ def test_probe(results, dev, a):
         ("torch_compile_bwd", compile_step(True)),
         ("host_pin_memory", host_pin_memory),
     ]
+    # Probes whose machinery does not exist on this device class are recorded as skipped/unsupported
+    # (kept in the JSON, excluded from the pass rate) instead of counting as failures.
+    not_applicable = {
+        "tpu": {
+            "sdpa_flash": "no flash-attention kernel on TPU (SDPA exposes MATH; splash attention is torch.tpu.ops.splash_sdpa)",
+            "sdpa_efficient": "no efficient-attention kernel on TPU (SDPA exposes MATH)",
+            "sdpa_cudnn": "cuDNN attention does not exist on TPU",
+            "grad_scaler": "TPU accumulates in bf16/fp32 and has no GradScaler unscale kernel",
+            "int8_mm": "torch._int_mm has no TorchTPU kernel (int8 MXU is not reachable through this op)",
+            "host_pin_memory": "TPU exposes no pinned-host allocator through torch",
+        },
+    }.get(dev.type, {})
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # probes run silently; exceptions go into results instead of spamming output
         for name, fn in probes:
+            if name in not_applicable:
+                results.append(dict(test="probe", config=name, value=None, unit="probe",
+                                    status="skipped", error_kind="unsupported",
+                                    error=not_applicable[name]))
+                continue
             try:
                 fn()
                 r = dict(test="probe", config=name, value=1.0, unit="probe", status="pass")
@@ -95,7 +112,8 @@ def test_probe(results, dev, a):
     # after all probes, print the yes/no list once and pause a few seconds before continuing
     ok = [r["config"] for r in results if r["test"] == "probe" and r["status"] == "pass"]
     bad = [r for r in results if r["test"] == "probe" and r["status"] == "fail"]
-    if not ok and not bad:
+    na = [r["config"] for r in results if r["test"] == "probe" and r["status"] == "skipped"]
+    if not ok and not bad and not na:
         return
     print(t("== usability matrix: {ok}/{total} available", ok=len(ok), total=len(ok) + len(bad)), flush=True)
     for i in range(0, len(ok), 6):
@@ -103,6 +121,8 @@ def test_probe(results, dev, a):
     for r in bad:
         reason = (r.get("error") or "")[:100]
         print(f"   ✗ {r['config']} — {reason}", flush=True)
+    if na:
+        print("   – " + "  ".join(na) + t(" (not applicable on this device)"), flush=True)
     print(t("   benchmarks start in 3 s ..."), flush=True)
     time.sleep(3)
 

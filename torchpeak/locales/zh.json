@@ -2,8 +2,6 @@
  "% peak": "%峰",
  "\n== compile speedup (! marks compile regressions)": "\n== compile 加速比（! 表示 compile 反而变慢）",
  "Note: only rows with identical config (both --quick or both full scale, same precision) compare directly; train rows must also match bs. ! marks a differing batch or a compile fallback. (N% peak) is spec-denominator software efficiency.": "注意：只有 config 完全一致（同为 --quick 或同为完整规模、同精度）的行才可直接比较；train 行的 bs 也必须一致，! 表示 batch 不同或 compile 回退。(N%峰) 为规格口径软件效率。",
- "device selection: auto / cuda / xpu / mps / cpu": "设备选择：auto / cuda / xpu / mps / cpu",
- "model-test precision: fp32/fp16/bf16, comma-separated or all (default fp16)": "模型测试精度：fp32/fp16/bf16，支持逗号分隔或 all（默认 fp16）",
  "small sizes, fast run": "小规模快速跑",
  "run resnet/train/gpt with torch.compile only": "只对 resnet/train/gpt 使用 torch.compile",
  "AB/BA alternated eager vs compile compare (default on)": "AB/BA 交替对比 eager/compile（默认启用）",
@@ -79,5 +77,10 @@
  "{what} is unusable for {dtype} on this stack: {detail}": "在本栈上 {what} 对 {dtype} 不可用：{detail}",
  "probe each torch.compile / Triton codegen path in a throwaway subprocess first; costs ~30 s per dtype but keeps a vendor codegen crash from taking the whole group down (off by default)": "先用一次性子进程探测每一条 torch.compile / Triton codegen 路径；每个 dtype 约多花 30 秒，但厂商 codegen 崩溃时只损失那几行而不会带走整组（默认关闭）",
  "unknown test name(s): {names}; known: {known}": "未知测试名：{names}；可用：{known}",
- "--tests hf requires --hf-model (e.g. Qwen/Qwen2.5-0.5B-Instruct)": "--tests hf 需要同时给出 --hf-model（例如 Qwen/Qwen2.5-0.5B-Instruct）"
+ "--tests hf requires --hf-model (e.g. Qwen/Qwen2.5-0.5B-Instruct)": "--tests hf 需要同时给出 --hf-model（例如 Qwen/Qwen2.5-0.5B-Instruct）",
+ "device selection: auto / cuda / xpu / tpu / mps / cpu": "设备选择：auto / cuda / xpu / tpu / mps / cpu",
+ "model-test precision: fp32/fp16/bf16, comma-separated or all (default fp16, bf16 on TPU)": "模型测试精度：fp32/fp16/bf16，支持逗号分隔或 all（默认 fp16，TPU 上为 bf16）",
+ " (not applicable on this device)": "（本设备不适用）",
+ "== --compile-mode {mode} has no TorchTPU equivalent; using the TPU backend default": "== --compile-mode {mode} 在 TorchTPU 上没有对应实现，使用 TPU 后端默认值",
+ "device properties": "设备属性"
 }
