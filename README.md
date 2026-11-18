@@ -130,6 +130,9 @@ reference, with per-dtype tolerances. Identical NaN on both sides passes and is 
 - The bandwidth headline (`device_bw`) only counts read/write/copy at the DRAM size for the same
   reason — the 16 MiB (L2-regime) row can exceed the ceiling and that gap is the cache effect.
 - GEMV is scored in GB/s over bytes moved (read W + read x + write y), not TFLOPS.
+- SDPA probes run the fused backends at the dtype they require (fp16, head_dim 64, seq 512); probing
+  Flash or cuDNN with fp32 fails on every device and says nothing about the hardware. `MATH` (and the
+  CPU path) stays fp32, since half-precision CPU math is not implemented everywhere.
 
 **TPU accounting (TorchTPU, `device="tpu"`).** A TPU has no fp32 matmul unit: float32 and float16
 matmuls are bf16 MXU passes, and the stack default (`medium`) is a *single* pass. torchpeak therefore

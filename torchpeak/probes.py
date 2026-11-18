@@ -8,6 +8,19 @@ from .runtime import empty_cache, sync
 from .i18n import t
 from .harness import autocast, error_fields, tcompile
 
+SDPA_FUSED_BACKENDS = {"FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN_ATTENTION"}
+
+
+def sdpa_probe_dtype(dev, backend_name):
+    """Fused SDPA kernels accept fp16/bf16 only: Flash requires it in flash_api.cpp, cuDNN's
+    check_dtypes_low_precision allows only half/bfloat16 on sm>=80. Probing them with the default
+    fp32 tensors failed on every CUDA device. MATH is the fp32 reference path, and CPU keeps fp32
+    because half-precision CPU math is not implemented for every op."""
+    if backend_name not in SDPA_FUSED_BACKENDS or dev.type == "cpu":
+        return torch.float32
+    return torch.float16
+
+
 # ---------------------------------------------------------------- feature availability matrix
 def test_probe(results, dev, a):
     """Third evaluation layer: feature probes. Each answers yes/no plus an error message, aggregated into a pass rate; "unavailable" is itself a finding."""
@@ -27,7 +40,10 @@ def test_probe(results, dev, a):
         from torch.nn.attention import SDPBackend, sdpa_kernel
         def run():
             backend = getattr(SDPBackend, backend_name)
-            q = torch.randn(1, 2, 8, 16, device=dev)
+            dtype = sdpa_probe_dtype(dev, backend_name)
+            # head_dim 64 / seq 512 at half precision is a shape all fused backends accept; the old
+            # 8x16 fp32 probe was rejected by cuDNN's shape gates even when the kernel exists.
+            q = torch.randn(2, 8, 512, 64, device=dev, dtype=dtype)
             with sdpa_kernel([backend]):
                 F.scaled_dot_product_attention(q, q, q)
         return run
