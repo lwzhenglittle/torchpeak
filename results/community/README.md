@@ -9,6 +9,7 @@ recipe and rules; `scripts/validate_result.py` checks every file in CI.
 | [gtx1660ti](gtx1660ti/gtx1660ti.json) | NVIDIA GeForce GTX 1660 Ti (Turing, 6 GB) | full default suite, torch 2.15.0+cu132 |
 | [accl-hbw](accl-hbw/accl-hbw.json) | Heterogeneous accelerator, codename "HBW" (68.7 GB, 80 CUs) | full default suite, torch 2.9.0, vendor Triton 3.3.0 |
 | [rtx5090](rtx5090/rtx5090.json) | NVIDIA GeForce RTX 5090 (Blackwell GB202, 32 GB, 170 CUs) | full default suite, torch 2.15.0+cu132 (cuda:0 of a dual-GPU host) |
+| [rtx-pro-6000](rtx-pro-6000/rtx-pro-6000.json) | NVIDIA RTX PRO 6000 Blackwell Workstation Edition (GB202, 96 GiB, 188 CUs) | full default suite, torch 2.15.0+cu132 (cuda:0 of a dual-GPU host) |
 
 Measured values here feed `peaks.json` entries: `basis: "measured, see results/community/<slug>/<slug>.json"`.
 HTML reports are not stored — they regenerate from the JSON (`meta` + `results`). The `<file>.md`
