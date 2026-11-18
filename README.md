@@ -41,7 +41,7 @@ When it finishes:
 
 - open `results/bench_<host>_<device>.html` — a self-contained report (usability matrix,
   efficiency bars, memory-mountain heatmap, compile-speedup table); a real
-  [GTX 1660 Ti run](results/community/gtx1660ti.json) is in the community corpus (JSON —
+  [GTX 1660 Ti run](results/community/gtx1660ti/gtx1660ti.json) is in the community corpus (JSON —
   the HTML report regenerates from it)
 - `results/bench_<host>_<device>.json` — machine-readable rows with per-row trials,
   efficiency fields and raw errors (`meta.format_version` marks the schema)
@@ -193,19 +193,21 @@ torch.compile，记录加速比、冷/热编译时间、显存、数值双口径
 ## Contributing
 ### Submit your results
 
-Run the default suite on your device and PR the JSON into `results/community/` — one file per
-device, named after it (`gtx1660ti.json`, `arc-b390.json`, `a100-sxm4-80gb.json`; append `-tuned`
-for `--tuned` runs). Use a device-only label:
+Run the default suite on your device and PR the JSON into `results/community/<slug>/` — one
+directory per device, holding `<slug>.json` (`results/community/gtx1660ti/gtx1660ti.json`,
+`results/community/arc-b390/arc-b390.json`; append `-tuned` for `--tuned` runs). Use a device-only
+label:
 
 ```bash
 python -m torchpeak --label gtx1660ti            # full default suite
 ```
 
-Commit only the JSON (HTML regenerates from it); `scripts/validate_result.py` runs in CI and
-checks schema, filename and size. Measured values from these files feed `peaks.json` entries
-(`basis: "measured, see results/community/<file>"`) — a result PR plus a peak-table entry in the
-same PR is the ideal contribution. Compare across machines with
-`python -m torchpeak --compare results/community/a.json results/community/b.json`.
+Commit the JSON plus its generated `<slug>.md` table view (HTML regenerates from the JSON);
+`scripts/validate_result.py` runs in CI and checks schema, filename, directory and size. Measured
+values from these files feed `peaks.json` entries (`basis: "measured, see
+results/community/<slug>/<slug>.json"`) — a result PR plus a peak-table entry in the same PR is the
+ideal contribution. Compare across machines with `python -m torchpeak --compare
+results/community/*/*.json`.
 
 - Peak-table corrections (new devices, wrong specs) are plain JSON PRs against `peaks.json`.
 - Vendor submissions are welcome and must be labelled: put `--tuned` results in a separate file and

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Validate community-contributed result files (results/community/*.json).
+"""Validate community-contributed result files (results/community/<slug>/<slug>.json).
 
 Hard failures (exit 1): unparseable JSON, wrong format_version, incomplete meta,
-bad filename slug, oversized file, or no measured rows.
+bad filename slug, a nested file whose directory name differs from its slug,
+oversized file, or no measured rows.
 Soft warnings (stderr, exit 0): hostname-looking label, home-path leakage.
 """
 import json
@@ -20,6 +21,9 @@ def validate(path):
     if not SLUG.match(name):
         return [f"filename {name!r} is not a device slug like 'gtx1660ti.json' or 'a100-sxm4-80gb.json'"], []
     p = Path(path)
+    base = p.stem[:-6] if p.stem.endswith("-tuned") else p.stem
+    if "community" in p.parts and p.parent.name != base:
+        return [f"{name}: lives in {p.parent.name!r}, expected results/community/{base}/"], []
     if p.stat().st_size > MAX_BYTES:
         return [f"{name}: {p.stat().st_size} bytes exceeds the {MAX_BYTES} cap"], []
     try:

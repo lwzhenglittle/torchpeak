@@ -2,9 +2,9 @@
 """Render result JSON files as human-readable Markdown tables.
 
 Usage:
-    python scripts/result_to_md.py results/community/*.json     # write <name>.md beside each JSON
-    python scripts/result_to_md.py --check results/community/*.json
-    python scripts/result_to_md.py --stdout results/community/gtx1660ti.json
+    python scripts/result_to_md.py results/community/*/*.json     # write <name>.md beside each JSON
+    python scripts/result_to_md.py --check results/community/*/*.json
+    python scripts/result_to_md.py --stdout results/community/gtx1660ti/gtx1660ti.json
 
 --check exits 1 when a .md is missing or stale (CI gate).
 """
