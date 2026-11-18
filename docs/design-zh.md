@@ -45,8 +45,10 @@ $$\text{软件效率} = \frac{\text{实测吞吐（FLOP/s 或 B/s）}}{\text{硬
 
 设备显存带宽与主机互连带宽是两个独立维度（`device_bw` / `host_bw`）：H2D/D2H 永远不除以
 DRAM 峰值，可选的 `host_bw_gbs` 条目提供互连分母。`device_bw` 的实测上限只取 DRAM 区间
-STREAM 算子（read/write/copy）的包络——L2 内尺寸、GEMV、memory mountain 与模型级权重带宽
-保留逐行比值，但不抬高上限。
+STREAM 算子（read/write/copy）的包络——L2 内尺寸、DRAM 区间的 GEMV、memory mountain 与模型级
+权重带宽保留逐行比值，但不抬高上限。工作集装得进末级缓存的 GEMV 不是 DRAM 测量：它保留
+GB/s 数值和 `working_set_mb`/`cache_resident` 字段，但不给规格/实测比值（fp16 的 LLM 权重
+形状为 86 MiB——在 96 MiB L2 的卡上是缓存命中，在 64 MiB 的卡上才是 DRAM 流量）。
 
 | 指标 | 定义 | 用途 |
 | --- | --- | --- |
@@ -78,7 +80,7 @@ flowchart LR
 | 测试 | 设计意图 |
 | --- | --- |
 | `gemm` 方阵 + LLM 非方阵（1024×4096×11008 等），fp32/fp16/bf16 + int8 | 张量核路径；非方阵暴露调度与 tile 选择问题 |
-| `gemv` m=1，按搬运字节（读 W + 读 x + 写 y）报 GB/s | 带宽受限负载的正确计分维度 |
+| `gemv` m=1，按搬运字节（读 W + 读 x + 写 y）报 GB/s；两种工作集：LLM 权重矩阵（fp16 下 86 MiB，在 ≥96 MiB L2 的卡上是缓存命中）与 512 MiB 的 DRAM 区间矩阵（现有 L2 都装不下；`--quick` 只保留模型形状） | 带宽受限负载的正确计分维度，把缓存区间与 DRAM 区间分开 |
 | `vec` FMA 链，torch 路径 vs 原生 Triton packed-fp16 kernel | torch `opmath` 把 fp16/bf16 逐元素提升到 fp32（Triton TTIR 可验证），torch 路径测的是 fp32 率；native kernel 保持 fp16 运算以暴露 half2 打包率（Arc B390：6.4 vs 13.4 vs 峰值 15.36） |
 | `bandwidth` read/write/copy + h2d/d2h，L2 内与超出 L2 各一个尺寸（套件精简时去掉 pinned 变体） | 设备侧与互连侧带宽分开测；两个尺寸区分缓存与 DRAM 区间 |
 | `memory_wall` CSAPP memory mountain：读吞吐 × 工作集 × 步长矩阵 | 区分 L1/L2/L3/DRAM 区间；主数值取最大工作集 stride-1 单元，缓存区单元只进热力图 |

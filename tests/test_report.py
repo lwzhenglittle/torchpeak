@@ -50,6 +50,22 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["eff_spec_pct"], 40.0)  # per-row spec ratio still annotated
         self.assertNotIn("peak_measured", rows[0])
 
+    def test_cache_resident_gemv_gets_no_dram_ratio(self):
+        rows = [
+            {"test": "gemv", "config": "fp16 m1 k4096 n11008", "value": 3108.0, "unit": "GB/s",
+             "working_set_mb": 86.0, "cache_mb": 96.0, "cache_resident": True},
+            {"test": "gemv", "config": "fp16 m1 k4096 n65536", "value": 1700.0, "unit": "GB/s",
+             "working_set_mb": 512.0, "cache_mb": 96.0, "cache_resident": False},
+            {"test": "bandwidth", "config": "read 1024MiB", "value": 1643.0, "unit": "GB/s"},
+        ]
+        annotate_efficiency(rows, {"bw_gbs": 1792.0})
+        # 86 MiB fits the 96 MiB L2: the 3108 GB/s is cache bandwidth, so no DRAM ratio may be written
+        for key in ("peak_spec", "eff_spec_pct", "peak_measured", "eff_measured_pct"):
+            self.assertNotIn(key, rows[0])
+        self.assertEqual(rows[1]["eff_spec_pct"], 94.9)
+        self.assertEqual(rows[1]["eff_measured_pct"], 103.5)
+        self.assertEqual(rows[2]["eff_spec_pct"], 91.7)
+
     def test_compile_speedup_and_regression(self):
         rows = [
             {"test": "train", "config": "bert fp32 eager", "value": 100.0, "unit": "tok/s"},

@@ -63,7 +63,7 @@ python -m torchpeak --compare results/bench_*.json   # side-by-side across runs/
 | Layer | Tests | What they exercise |
 | --- | --- | --- |
 | 1. Usability probes | `probe` — 13 one-shot checks: autocast dtypes, SDPA backends, GradScaler, channels_last, int8 mm, compile fwd/bwd, pin_memory | Which code paths exist and run at all; pass rate plus per-feature error text |
-| 2. Operators | `gemm` (fp32/fp16/bf16/int8; a small square, a large square and an LLM non-square shape), `gemv` (reported as GB/s — it is bandwidth-bound), `vec` (vector-ALU FMA chain; torch path **and** a raw-Triton packed-fp16 kernel), `bandwidth` (read/write/copy + h2d/d2h, one L2-resident and one DRAM size) | Whether the operator library reaches tensor cores, packed math and DRAM; separating compute-bound from bandwidth-bound behavior |
+| 2. Operators | `gemm` (fp32/fp16/bf16/int8; a small square, a large square and an LLM non-square shape), `gemv` (reported as GB/s — it is bandwidth-bound; two working sets: an LLM weight matrix and a 512 MiB DRAM-regime matrix), `vec` (vector-ALU FMA chain; torch path **and** a raw-Triton packed-fp16 kernel), `bandwidth` (read/write/copy + h2d/d2h, one L2-resident and one DRAM size) | Whether the operator library reaches tensor cores, packed math and DRAM; separating compute-bound from bandwidth-bound behavior |
 | 3. Models | `resnet` (infer), `gpt` (train + prefill), `llama` (1B-class RMSNorm/SwiGLU/RoPE: long-context prefill + bs1 KV-cache decode), `moe` (top-k sparse routing → dynamic shapes, graph breaks), `decode` (GPT-2-medium bs1 KV-cache decode ≈ llama.cpp tg), `hf_decode` (optional, any HF model via `--hf-model`); opt-in via `--tests`: `train` (5-model CV zoo), `memory_wall` (CSAPP memory mountain) | End-to-end throughput; per-test VRAM estimates with automatic downgrade to quick presets when the device is too small, OOM auto-halves the batch |
 
 ## Measurement methodology
@@ -98,8 +98,9 @@ reference, with per-dtype tolerances. Identical NaN on both sides passes and is 
   still get a consistent column. Device DRAM bandwidth and host-interconnect bandwidth
   (`host_bw_gbs`) are separate dimensions; H2D/D2H rows are never divided by the DRAM peak.
   The `device_bw` ceiling is an envelope over STREAM ops (read/write/copy) at DRAM-regime sizes
-  only — L2-resident sizes, GEMV, the memory mountain and model-level weight bandwidth keep their
-  per-row ratios but never raise the ceiling.
+  only — L2-resident sizes, DRAM-regime GEMV rows, the memory mountain and model-level weight
+  bandwidth keep their per-row ratios but never raise the ceiling; a GEMV whose working set fits
+  the device L2 gets no DRAM ratio at all.
 
 **Accounting details that matter.**
 
@@ -111,7 +112,11 @@ reference, with per-dtype tolerances. Identical NaN on both sides passes and is 
   cache-resident cells stay in the heatmap but never serve as the DRAM-efficiency numerator.
 - The bandwidth headline (`device_bw`) only counts read/write/copy at the DRAM size for the same
   reason — the 16 MiB (L2-regime) row can exceed the ceiling and that gap is the cache effect.
-- GEMV is scored in GB/s over bytes moved (read W + read x + write y), not TFLOPS.
+- GEMV is scored in GB/s over bytes moved (read W + read x + write y), not TFLOPS. Two working sets
+  per dtype: the LLM weight shape (`k4096 n11008`, 86 MiB at fp16) and a 512 MiB DRAM-regime shape no
+  current L2 can hold. The model shape is cache-resident on large-L2 parts (5090: 96 MiB L2), so its
+  row records `working_set_mb`/`cache_resident` and gets no DRAM-based spec/measured ratio — otherwise
+  it would report >100% of DRAM peak against the spec denominator.
 - SDPA probes run the fused backends at the dtype they require (fp16, head_dim 64, seq 512); probing
   Flash or cuDNN with fp32 fails on every device and says nothing about the hardware. `MATH` (and the
   CPU path) stays fp32, since half-precision CPU math is not implemented everywhere.

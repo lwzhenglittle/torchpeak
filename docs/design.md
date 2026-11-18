@@ -36,7 +36,7 @@ Compute-bound workloads (GEMM, whole models) are compared against compute peak; 
 - **Spec denominator**: the built-in table in `peaks.json` (each entry carries a `basis` derivation and `sources` citations); `--peaks FILE` prepends override entries, and `$TORCHPEAK_PEAKS` relocates the file path.
 - **Measured-ceiling denominator**: the best value for the same (metric dimension, dtype) within the current run. Devices with missing or untrustworthy specs still get an interpretable column; the gap between the two denominators is itself information.
 
-Device memory bandwidth and host interconnect bandwidth are two independent dimensions (`device_bw` / `host_bw`): H2D/D2H is never divided by the DRAM peak; an optional `host_bw_gbs` entry supplies the interconnect denominator. The `device_bw` measured ceiling is an envelope over STREAM ops (read/write/copy) at DRAM-regime sizes only — L2-resident sizes, GEMV, the memory mountain and model-level weight bandwidth keep their per-row ratios but never raise the ceiling.
+Device memory bandwidth and host interconnect bandwidth are two independent dimensions (`device_bw` / `host_bw`): H2D/D2H is never divided by the DRAM peak; an optional `host_bw_gbs` entry supplies the interconnect denominator. The `device_bw` measured ceiling is an envelope over STREAM ops (read/write/copy) at DRAM-regime sizes only — L2-resident sizes, DRAM-regime GEMV rows, the memory mountain and model-level weight bandwidth keep their per-row ratios but never raise the ceiling. A GEMV whose working set fits the device's last-level cache is not a DRAM measurement at all: it keeps its GB/s value and `working_set_mb`/`cache_resident` fields, but gets no spec or measured ratio (the fp16 LLM weight shape is 86 MiB — an L2 hit on a 96 MiB-L2 part, DRAM traffic on a 64 MiB one).
 
 | Metric | Definition | Purpose |
 | --- | --- | --- |
@@ -67,7 +67,7 @@ flowchart LR
 | Test | Design intent |
 | --- | --- |
 | `gemm` square matrices + LLM non-square shapes (1024×4096×11008, etc.), fp32/fp16/bf16 + int8 | Tensor-core path; non-square shapes expose scheduling and tile-selection problems |
-| `gemv` m=1, reported in GB/s over bytes moved (read W + read x + write y) | The correct scoring dimension for a bandwidth-bound workload |
+| `gemv` m=1, reported in GB/s over bytes moved (read W + read x + write y); two working sets: the LLM weight matrix (86 MiB at fp16, cache-resident on ≥96 MiB-L2 parts) and a 512 MiB DRAM-regime matrix no current L2 can hold (`--quick` keeps only the model shape) | The correct scoring dimension for a bandwidth-bound workload, with the cache and DRAM regimes separated |
 | `vec` FMA chain, torch path vs a native Triton packed-fp16 kernel | torch `opmath` promotes fp16/bf16 elementwise ops to fp32 (verifiable in Triton TTIR), so the torch path measures the fp32 rate; the native kernel keeps arithmetic in fp16 to expose the half2 packed rate (Arc B390: 6.4 vs 13.4 vs 15.36 peak) |
 | `bandwidth` read/write/copy + h2d/d2h, one L2-resident and one DRAM size (pinned variants dropped with the suite slimming) | Device-side and interconnect-side bandwidth measured separately; the two sizes separate the cache and DRAM regimes |
 | `memory_wall` CSAPP memory mountain: read throughput × working set × stride matrix | Separates the L1/L2/L3/DRAM regimes; the headline number comes from the largest-working-set stride-1 cell, while cache-resident cells only enter the heatmap |

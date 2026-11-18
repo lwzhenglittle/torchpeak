@@ -3,8 +3,22 @@ import time
 
 import torch
 from .i18n import t
-from .runtime import AMP, empty_cache, sync, path_failure, path_works
+from .runtime import AMP, empty_cache, last_level_cache_mb, path_failure, path_works, sync
 from .harness import measure, print_row, timeit
+
+# GEMV is scored as bandwidth, so its working set decides what it actually measures: the LLM weight
+# shape (k=4096, n=11008) is 86 MiB at fp16 -- DRAM on a 64 MiB L2, an L2 hit on a 96 MiB one. Keep
+# the real-model shape and add a DRAM-regime shape sized past every current last-level cache
+# (H100 50 MiB, 5080 64, 5090 96, B200 126, MI300X 256 MiB).
+GEMV_DRAM_K = 4096
+GEMV_DRAM_TARGET_MIB = 512
+
+
+def gemv_dram_n(dt_size):
+    """Columns for a GEMV whose weight matrix alone is >= GEMV_DRAM_TARGET_MIB, 64-aligned."""
+    n = (GEMV_DRAM_TARGET_MIB << 20) // (GEMV_DRAM_K * dt_size)
+    return max(1024, n - n % 64)
+
 
 try:  # optional; kept at module scope so triton's JIT can resolve `tl` from the kernel's globals
     import triton.language as tl
@@ -70,6 +84,8 @@ def test_gemm(results, dev, a):
                 cooldown=a.cooldown)
 
     def measure_gemv(test, name, m, k, n, dt_size, min_time):
+        cache_mb = last_level_cache_mb(dev)
+
         def run():
             if name == "int8":
                 x = torch.randint(-128, 127, (m, k), device=dev, dtype=torch.int8)
@@ -81,7 +97,12 @@ def test_gemm(results, dev, a):
                 op = lambda: x @ y
             t = timeit(op, dev, min_time=min_time, warmup=10 if a.strict else 3, max_iters=10000)
             bytes_moved = (m * k + k * n + m * n) * dt_size
-            return bytes_moved / t / 1e9
+            ws_mb = bytes_moved / 2 ** 20
+            extra = {"working_set_mb": round(ws_mb, 1)}
+            if cache_mb is not None:
+                extra["cache_mb"] = cache_mb
+                extra["cache_resident"] = ws_mb < cache_mb
+            return bytes_moved / t / 1e9, extra
 
         shape = f"m{m} k{k} n{n}"
         measure(results, dev, test, f"{name} {shape}", "GB/s", run, strict=a.strict, repeats=3,
@@ -92,16 +113,25 @@ def test_gemm(results, dev, a):
             for m, k, n in shapes:
                 measure_float("gemm", name, m, k, n)
     if gemv_selected:
-        # GEMV is bandwidth-bound: report GB/s from bytes moved (read W + read x + write y), not TFLOPS
+        # GEMV is bandwidth-bound: report GB/s from bytes moved (read W + read x + write y), not TFLOPS.
+        # Two sizes per dtype: the LLM weight shape, plus (outside --quick) a DRAM-regime shape that no
+        # current L2 can hold. The model shape stays cache-limited on large-L2 parts; its row records
+        # working_set_mb/cache_resident so the report can withhold a DRAM-based efficiency ratio.
         for name, dt_size in (("fp32", 4), ("fp16", 2), ("bf16", 2)):
             for m, k, n in gemv_shapes:
                 measure_gemv("gemv", name, m, k, n, dt_size, gemv_min_time)
+            if not a.quick:
+                measure_gemv("gemv", name, 1, GEMV_DRAM_K, gemv_dram_n(dt_size), dt_size, gemv_min_time)
     if int8_gemm_selected:
         for m, k, n in int8_shapes:
             measure_int8("gemm_int8", m, k, n)
     if int8_gemv_selected:
         for m, k, n in int8_gemv_shapes:
             measure_gemv("gemv_int8", "int8", m, k, n, 1, gemv_min_time)
+        if not a.quick and dev.type != "cpu":
+            # CPU torch._int_mm at m=32 picks a ~20 s/call path for this size (measured on a 5700X),
+            # and the CPU model row already exceeds any CPU L2, so the DRAM-regime int8 row is GPU-only.
+            measure_gemv("gemv_int8", "int8", 32, GEMV_DRAM_K, gemv_dram_n(1), 1, gemv_min_time)
 
 
 def test_vec(results, dev, a):

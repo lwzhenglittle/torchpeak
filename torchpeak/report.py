@@ -7,18 +7,26 @@ from .i18n import t
 EFFICIENCY_KINDS = ("tflops", "vec_tflops", "vec_packed", "tops", "device_bw", "host_bw")
 HOST_OPS = {"h2d", "d2h", "h2d_pinned", "d2h_pinned"}
 STREAM_OPS = {"read", "write", "copy"}
-DRAM_SIZE_MIB = 256  # working sets >= this are beyond any current GPU L2 (largest today ~50 MB)
+DRAM_SIZE_MIB = 512  # working sets >= this are beyond any current GPU L2 (largest today 256 MiB)
 
 
 def is_dram_stream_row(row):
     """Device-local STREAM op (read/write/copy) at a DRAM-regime size. Only such rows enter the
-    device_bw envelope / measured ceiling; L2-resident sizes, GEMV proxies, memory-wall cells and
-    model-level weight bandwidth stay per-row metrics (eff_spec_pct) without shaping the ceiling."""
+    device_bw envelope / measured ceiling; L2-resident sizes, DRAM-regime GEMV proxies, memory-wall
+    cells and model-level weight bandwidth stay per-row metrics (eff_spec_pct) without shaping the
+    ceiling, and a GEMV that fits the cache gets no DRAM ratio at all (is_cache_resident_gemv)."""
     if row.get("test") != "bandwidth":
         return False
     parts = (row.get("config") or "").split()
     return (len(parts) == 2 and parts[0] in STREAM_OPS and parts[1].endswith("MiB")
             and int(parts[1][:-3]) >= DRAM_SIZE_MIB)
+
+
+def is_cache_resident_gemv(row):
+    """A GEMV row whose working set fits the device last-level cache measures cache bandwidth, not
+    DRAM: on a 96 MiB-L2 part the fp16 model shape (86 MiB) reads at ~1.7x the HBM peak. Such a row
+    keeps its GB/s value but gets no DRAM-based spec/measured ratio (which would exceed 100%)."""
+    return row.get("test") in ("gemv", "gemv_int8") and bool(row.get("cache_resident"))
 
 
 def envelope_metric(row):
@@ -71,6 +79,8 @@ def annotate_efficiency(results, spec):
         m = row_metric(r)
         if not m:
             continue
+        if is_cache_resident_gemv(r):
+            continue  # working set fits L2: the GB/s number is cache bandwidth, not a DRAM ratio
         kind, key, value = m
         if kind == "tops":
             spec_peak = spec_int8
@@ -221,6 +231,8 @@ def write_html_report(meta, results, path):
     bars = []
     for k, (r, v) in best.items():
         note = f"{r['eff_spec_pct']:.0f}{t('% spec')}" if r.get("eff_spec_pct") is not None else t("no spec peak")
+        if r.get("cache_resident"):
+            note = t("L2-resident") + (f" · {note}" if note else "")
         bars.append((t("{kind} best {test} {config}", kind=k, test=r["test"], config=r["config"]), v, note))
     model_rows = [r for r in results if r.get("approx_tflops") is not None or r.get("approx_weight_bw_gbs") is not None]
     for r in model_rows:
@@ -234,9 +246,13 @@ def write_html_report(meta, results, path):
 
     # Bandwidth comparison bars (including pinned vs pageable)
     bw_rows = [r for r in results if r["test"] in ("bandwidth", "gemv", "gemv_int8") and r.get("value") is not None]
-    bw_bars = [(f"{r['test']} {r['config']}", r["value"],
-                f"{r['eff_spec_pct']:.0f}{t('% spec')}" if r.get("eff_spec_pct") is not None else "",
-                "#0d9488" if r["test"] != "bandwidth" else "#2563eb") for r in bw_rows]
+    bw_bars = []
+    for r in bw_rows:
+        note = f"{r['eff_spec_pct']:.0f}{t('% spec')}" if r.get("eff_spec_pct") is not None else ""
+        if r.get("cache_resident"):
+            note = t("L2-resident") + (f" · {note}" if note else "")
+        bw_bars.append((f"{r['test']} {r['config']}", r["value"], note,
+                        "#0d9488" if r["test"] != "bandwidth" else "#2563eb"))
 
     # Compile speedup table
     pair = {}

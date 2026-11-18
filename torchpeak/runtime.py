@@ -85,6 +85,32 @@ def empty_cache(dev):
             pass
 
 
+def last_level_cache_mb(dev):
+    """Last-level (L2) cache size in MiB, or None when the backend does not expose it. Used to tell a
+    cache-resident microbenchmark from a DRAM-regime one: the same working set is DRAM traffic on a
+    small-L2 part and an L2 hit on a large-L2 part, so the size alone does not decide the regime."""
+    try:
+        if dev.type == "cuda":
+            index = dev.index if dev.index is not None else torch.cuda.current_device()
+            p = torch.cuda.get_device_properties(index)
+        elif dev.type == "xpu":
+            index = dev.index if dev.index is not None else torch.xpu.current_device()
+            p = torch.xpu.get_device_properties(index)
+        elif dev.type in ("npu", "musa"):
+            m = mod(dev)
+            index = dev.index if dev.index is not None else m.current_device()
+            p = m.get_device_properties(index)
+        else:
+            return None
+    except Exception:
+        return None
+    for attr in ("L2_cache_size", "last_level_cache_size"):
+        size = getattr(p, attr, None)
+        if size:
+            return round(size / 2 ** 20, 1)
+    return None
+
+
 def device_info(dev):
     info = {"device_type": dev.type, "device_index": dev.index,
             "name": platform.processor() or platform.machine(), "backend": dev.type, "total_mem_gb": None}
@@ -104,7 +130,6 @@ def device_info(dev):
                         driver_version=getattr(p, "driver_version", None),
                         platform_name=getattr(p, "platform_name", None), uuid=str(getattr(p, "uuid", "")),
                         compute_units=getattr(p, "max_compute_units", None),
-                        last_level_cache_mb=round(getattr(p, "last_level_cache_size", 0) / 2 ** 20, 1),
                         is_integrated_gpu=getattr(p, "is_integrated_gpu", None))
         elif dev.type in ("npu", "musa"):
             m = mod(dev)
@@ -116,6 +141,9 @@ def device_info(dev):
                         compute_units=getattr(p, "multi_processor_count", None))
     except Exception as e:
         info["info_error"] = str(e)
+    cache_mb = last_level_cache_mb(dev)
+    if cache_mb is not None:
+        info["last_level_cache_mb"] = cache_mb
     return info
 
 

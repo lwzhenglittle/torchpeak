@@ -213,6 +213,10 @@ def print_row(r, head=None):
             extra += f" iqr {r['iqr_pct']:.2f}%"
         if not r["stable"]:
             extra += " UNSTABLE"
+    if "working_set_mb" in r:
+        extra += f"  ws {r['working_set_mb']:.0f} MiB"
+        if r.get("cache_resident"):
+            extra += f" L2-resident (cache {r.get('cache_mb')} MiB)" if r.get("cache_mb") else " L2-resident"
     if "bs_used" in r:
         extra += f"  bs{r['bs_used']}"
     if "approx_tflops" in r:

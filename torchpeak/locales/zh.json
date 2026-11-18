@@ -54,6 +54,7 @@
  "available": "可用",
  "% spec": "% 规格",
  "no spec peak": "无规格峰值",
+ "L2-resident": "L2 驻留",
  "{kind} best {test} {config}": "{kind} 最佳 {test} {config}",
  "compile speedup": "compile 加速比",
  "compile cold/hot": "编译 冷/热",
