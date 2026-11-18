@@ -140,7 +140,11 @@ def peak_gb(dev):
 
 
 def peak_reserved_gb(dev):
-    """Caching-allocator reserved bytes; on iGPU/UMA this diverges a lot from allocated, so record both."""
+    """Caching-allocator reserved bytes; on iGPU/UMA this diverges a lot from allocated, so record both.
+    TorchTPU's max_memory_reserved is a small fixed runtime pool (observed 0.02-0.82 GB against 14.7 GB
+    allocated), not a caching-allocator reserve, so the field is left empty there."""
+    if dev.type == "tpu":
+        return None
     for m in (_accelerator(dev), mod(dev)):
         if m is not None and hasattr(m, "max_memory_reserved"):
             try:
@@ -217,13 +221,18 @@ def device_info(dev):
             props = {k: getattr(p, k, None) for k in (
                 "name", "devices_per_chip", "hbm_bytes_per_chip", "hbm_bytes_per_device",
                 "bf16_flops_per_chip", "bf16_flops_per_device", "sparse_cores_per_device",
-                "sparse_core_simd_width", "topology", "version")}
+                "sparse_core_simd_width", "topology", "version",
+                # deprecated in TorchTPU once torch.accelerator exists, but the only memory/size
+                # fields older wheels expose (v5e run on torch_tpu 0.2.0 reported name only)
+                "total_memory", "multi_processor_count")}
             props = {k: v for k, v in props.items() if v is not None}
-            mem = props.get("hbm_bytes_per_device") or props.get("hbm_bytes_per_chip")
+            mem = (props.get("hbm_bytes_per_device") or props.get("hbm_bytes_per_chip")
+                   or props.get("total_memory"))
             info.update(device_index=index, name=props.get("name", "TPU"),
                         total_mem_gb=round(mem / 1e9, 1) if mem else None,
                         backend="torch_tpu " + (_pkg_version("torch_tpu") or "unknown"),
-                        compute_units=None, device_properties=props)
+                        compute_units=props.get("multi_processor_count"),
+                        device_properties=props)
         elif dev.type in ("npu", "musa"):
             m = mod(dev)
             index = dev.index if dev.index is not None else m.current_device()

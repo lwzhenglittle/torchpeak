@@ -1,5 +1,84 @@
 [
  {
+  "match": "tpu v6e",
+  "device": "Google TPU v6e (Trillium, 1 TensorCore/chip)",
+  "tflops": {
+   "fp32": 153.0,
+   "fp16": 918,
+   "bf16": 918
+  },
+  "tflops_fp32_mode": {
+   "highest": 153.0,
+   "high": 306.0,
+   "medium": 918
+  },
+  "int8_tops": 1836,
+  "bw_gbs": 1638,
+  "basis": "vendor spec: 918 TFLOPS bf16 per chip, 32 GiB HBM at 1638 GB/s. No native fp32/fp16 matmul unit: the MXU runs bf16 passes (medium=1, high=3, highest=6), so tflops.fp32 is the 6-pass 'highest' rate and tflops_fp32_mode lists all modes",
+  "sources": [
+   "https://docs.cloud.google.com/tpu/docs/v6e"
+  ]
+ },
+ {
+  "match": "tpu v5p",
+  "device": "Google TPU v5p (2 TensorCores/chip)",
+  "tflops": {
+   "fp32": 76.5,
+   "fp16": 459,
+   "bf16": 459
+  },
+  "tflops_fp32_mode": {
+   "highest": 76.5,
+   "high": 153.0,
+   "medium": 459
+  },
+  "bw_gbs": 2765,
+  "basis": "vendor spec: 459 TFLOPS bf16 per chip, 95 GiB HBM at 2765 GB/s. No native fp32/fp16 matmul unit: the MXU runs bf16 passes (medium=1, high=3, highest=6), so tflops.fp32 is the 6-pass 'highest' rate and tflops_fp32_mode lists all modes",
+  "sources": [
+   "https://docs.cloud.google.com/tpu/docs/v5p"
+  ]
+ },
+ {
+  "match": "tpu v5e",
+  "device": "Google TPU v5e (1 TensorCore/chip)",
+  "tflops": {
+   "fp32": 32.833,
+   "fp16": 197,
+   "bf16": 197
+  },
+  "tflops_fp32_mode": {
+   "highest": 32.833,
+   "high": 65.667,
+   "medium": 197
+  },
+  "int8_tops": 393,
+  "bw_gbs": 819,
+  "basis": "vendor spec: 197 TFLOPS bf16 per chip, 16 GiB HBM at 819 GB/s. No native fp32/fp16 matmul unit: the MXU runs bf16 passes (medium=1, high=3, highest=6), so tflops.fp32 is the 6-pass 'highest' rate and tflops_fp32_mode lists all modes",
+  "sources": [
+   "https://docs.cloud.google.com/tpu/docs/v5e"
+  ]
+ },
+ {
+  "match": "tpu v4",
+  "device": "Google TPU v4 (2 TensorCores/chip)",
+  "tflops": {
+   "fp32": 45.833,
+   "fp16": 275,
+   "bf16": 275
+  },
+  "tflops_fp32_mode": {
+   "highest": 45.833,
+   "high": 91.667,
+   "medium": 275
+  },
+  "int8_tops": 275,
+  "bw_gbs": 1200,
+  "basis": "vendor spec: 275 TFLOPS bf16 per chip, 32 GiB HBM at 1200 GB/s. No native fp32/fp16 matmul unit: the MXU runs bf16 passes (medium=1, high=3, highest=6), so tflops.fp32 is the 6-pass 'highest' rate and tflops_fp32_mode lists all modes",
+  "sources": [
+   "https://docs.cloud.google.com/tpu/docs/v4"
+  ]
+ },
+ {
   "match": "b390",
   "device": "Intel Arc B390 (Panther Lake iGPU, 12 Xe3 @ 2.5GHz)",
   "tflops": {

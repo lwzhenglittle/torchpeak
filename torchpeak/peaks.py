@@ -8,6 +8,8 @@ import os
 #    "device": display name, "tflops": {dtype: matrix-path peak}, "vec_tflops": {dtype: vector-path peak},
 #    "vec_packed_tflops": {dtype: packed-path peak}, "int8_tops": value, "bw_gbs": local bandwidth,
 #    "host_bw_gbs": optional host interconnect bandwidth (H2D/D2H only; spec efficiency is not reported when missing),
+#    "tflops_fp32_mode": optional {highest|high|medium: rate} for devices without a native fp32
+#                        matmul unit (TPU: the MXU runs 1/3/6 bf16 passes per mode),
 #    "basis": basis description, "sources": [sources]}
 # Matching takes the first substring hit in entry order; more specific entries (a100-sxm4-80gb) precede generic ones (a100).
 # Entries passed via --peaks precede the built-in table (matched first). Without peaks.json, fall back to the "measured-only ceiling" basis.

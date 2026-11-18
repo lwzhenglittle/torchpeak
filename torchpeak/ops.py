@@ -243,6 +243,13 @@ def test_bandwidth(results, dev, a):
 
     for size_mib in sizes:
         for op in ops:
+            if op == "copy" and dev.type == "tpu":
+                # TorchTPU copies are buffer references (copy-on-write), so y.copy_(x) moves no bytes:
+                # a v5e run measured 15 TB/s at 16 MiB and 914 TB/s at 1 GiB, and that value would
+                # poison the device_bw envelope for every other row.
+                _record_skipped(results, "bandwidth", f"copy {size_mib}MiB", "GB/s",
+                                "TPU copy_ is a buffer reference (copy-on-write), not a byte-moving copy")
+                continue
             def run(size_mib=size_mib, op=op):
                 nbytes = size_mib * 2 ** 20
                 if op == "read":

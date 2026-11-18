@@ -165,11 +165,16 @@ OOM 时自动减半 batch；可选项 `--hf-model` 用真实 HF 权重补一行�
   按设备携带 backend，Inductor 专属的 `--compile-mode` 取值会被忽略并提示。TPU 没有原生 fp32
   矩阵单元，所以 fp32 GEMM 测两遍（主行为 `highest`＝6 趟 bf16 MXU，附加行为栈默认 `medium`），
   每行带 `matmul_precision` 并各自除以 `spec.tflops_fp32_mode[mode]`；模型行按 `highest` 运行，
-  整个策略写入 `meta.matmul_precision`。规格分母由 `torch.tpu.get_device_properties()`
-  （`bf16_flops_per_device`、`hbm_bytes_per_device`）现场推导，不依赖静态表。TPU 上不存在的
-  路径（Triton、`torch._int_mm`、CUDA SDPA 内核、`GradScaler`、pinned 主机内存）记为
-  `skipped`/`unsupported`，跳过的探针不计入可用性通过率。一进程只基准一个 TPU 设备，
-  默认 label 带设备序号。
+  整个策略写入 `meta.matmul_precision`。规格分母优先由 `torch.tpu.get_device_properties()`
+  （`bf16_flops_per_device`、`hbm_bytes_per_device`）现场推导，旧 wheel 不暴露速率时用内置的
+  v4/v5e/v5p/v6e 条目（各带 `tflops_fp32_mode`）；`total_memory`/`multi_processor_count`
+  （已废弃 getter）作为旧 wheel 的总显存兜底。TPU 上跳过设备间 `copy`：TorchTPU 的拷贝是
+  buffer 引用（copy-on-write），计时到的不是搬字节（v5e：16MiB 15TB/s、1GiB 914TB/s），
+  会污染 `device_bw` 上限；STREAM 证据以 read/write 为准。`max_memory_reserved` 在 TPU 上
+  不是 caching allocator 的 reserved（实测 0.02–0.82GB vs allocated 14.7GB），故不记录
+  `peak_reserved_gb`。TPU 上不存在的路径（Triton、`torch._int_mm`、CUDA SDPA 内核、
+  `GradScaler`、pinned 主机内存）记为 `skipped`/`unsupported`，跳过的探针不计入可用性通过率。
+  一进程只基准一个 TPU 设备，默认 label 带设备序号。
 
 **可移植性契约。** 主测试只用 torch 算子和标准的按后端模块接口——任何实现了 torch 设备
 API 的后端都能直接跑。自动检测先问 `torch.accelerator` 当前加速器，再依次探测
@@ -178,7 +183,7 @@ API 的后端都能直接跑。自动检测先问 `torch.accelerator` 当前加�
 triton-native 行（torch 行照常），`torch._int_mm` 或某个 SDPA 后端缺失只标记对应探针，
 Inductor 不可用时 compile 行报错、eager 行照常。接入全新设备类型（内置集合之外）只需在
 `pick_device` 加分支，旧模块不可用时再在 `runtime.ACCELERATOR_ONLY` 加一项；峰值条目可选——
-TPU 自行推导规格，其余设备无峰值条目时自动退化为实测上限口径。
+TPU 内置 v4/v5e/v5p/v6e 条目，也能从设备属性现场推导；其余设备无峰值条目时自动退化为实测上限口径。
 
 ## 复现规范
 

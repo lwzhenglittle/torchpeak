@@ -35,6 +35,18 @@ class _FakeAccelerator:
 
 
 class TpuSpecTests(unittest.TestCase):
+    def test_bundled_table_matches_tpu_generations(self):
+        from torchpeak.peaks import load_peak_entries, match_peak
+        entries, _ = load_peak_entries(None)
+        for name in ("TPU v4", "TPU v5e", "TPU v5p", "TPU v6e"):
+            spec = match_peak({"name": name}, entries)
+            self.assertIsNotNone(spec, name)
+            modes = spec["tflops_fp32_mode"]
+            self.assertLess(modes["highest"], modes["high"])
+            self.assertLess(modes["high"], modes["medium"])
+            self.assertAlmostEqual(modes["medium"], spec["tflops"]["bf16"])
+            self.assertEqual(spec["tflops"]["fp32"], modes["highest"])
+
     def test_spec_is_derived_from_device_properties(self):
         info = {"name": "TPU v6e", "device_properties": {
             "name": "TPU v6e", "bf16_flops_per_device": 918e12, "hbm_bytes_per_device": 32e9}}

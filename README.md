@@ -118,12 +118,16 @@ matmuls are bf16 MXU passes, and the stack default (`medium`) is a *single* pass
 measures every fp32 GEMM twice on TPU — the primary row at `highest` (6 passes, ~IEEE-32 accuracy,
 ~1/6 of the bf16 rate) and an additional row at the stack default `medium` — and divides each by its
 own peak (`tflops_fp32_mode`). Both modes, the model-run mode and the stack default are recorded in
-`meta.matmul_precision`. The spec denominator is derived from `torch.tpu.get_device_properties()`
-(`bf16_flops_per_device`, `hbm_bytes_per_device`) instead of a static table entry, so new TPU
-generations need no JSON. Paths that do not exist on TPU (Triton, `torch._int_mm`, CUDA SDPA
+`meta.matmul_precision`. The spec denominator comes from `torch.tpu.get_device_properties()`
+(`bf16_flops_per_device`, `hbm_bytes_per_device`) when the wheel exposes those rates, else from the
+bundled v4/v5e/v5p/v6e table entries (each carries `tflops_fp32_mode`), so efficiency-vs-spec is
+reported on current generations. Paths that do not exist on TPU (Triton, `torch._int_mm`, CUDA SDPA
 backends, `GradScaler`, host pinned memory) are recorded as `skipped`/`unsupported`; skipped probes
-are excluded from the usability pass rate. `torch.compile` goes through the registered `tpu` Dynamo
-backend (Inductor modes do not apply), and one process benchmarks one TPU device.
+are excluded from the usability pass rate. Device-to-device `copy` is also skipped there: TorchTPU
+copies are buffer references (copy-on-write), so timing one reports terabytes per second and would
+poison the measured bandwidth ceiling; `read`/`write` rows are the STREAM evidence. `torch.compile`
+goes through the registered `tpu` Dynamo backend (Inductor modes do not apply), and one process
+benchmarks one TPU device.
 
 ## CLI reference
 
