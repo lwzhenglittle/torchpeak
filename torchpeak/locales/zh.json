@@ -75,5 +75,9 @@
  "Spec efficiency": "规格效率",
  "Measured efficiency": "实测效率",
  "strict mode: fixed 7 rounds, median + IQR dispersion, longer warm-up/timing": "严格模式：固定 7 轮，报告中位数和 IQR 波动，增加预热与计时时间",
- "idle seconds between subtests for DVFS/thermal recovery (0 disables)": "子项间空闲秒数，用于 DVFS/散热恢复（0 关闭）"
+ "idle seconds between subtests for DVFS/thermal recovery (0 disables)": "子项间空闲秒数，用于 DVFS/散热恢复（0 关闭）",
+ "{what} is unusable for {dtype} on this stack: {detail}": "在本栈上 {what} 对 {dtype} 不可用：{detail}",
+ "probe each torch.compile / Triton codegen path in a throwaway subprocess first; costs ~30 s per dtype but keeps a vendor codegen crash from taking the whole group down (off by default)": "先用一次性子进程探测每一条 torch.compile / Triton codegen 路径；每个 dtype 约多花 30 秒，但厂商 codegen 崩溃时只损失那几行而不会带走整组（默认关闭）",
+ "unknown test name(s): {names}; known: {known}": "未知测试名：{names}；可用：{known}",
+ "--tests hf requires --hf-model (e.g. Qwen/Qwen2.5-0.5B-Instruct)": "--tests hf 需要同时给出 --hf-model（例如 Qwen/Qwen2.5-0.5B-Instruct）"
 }

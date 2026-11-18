@@ -3,8 +3,25 @@ import time
 
 import torch
 from .i18n import t
-from .runtime import AMP, empty_cache, sync
+from .runtime import AMP, empty_cache, sync, path_failure, path_works
 from .harness import measure, print_row, timeit
+
+try:  # optional; kept at module scope so triton's JIT can resolve `tl` from the kernel's globals
+    import triton.language as tl
+except Exception:  # noqa: BLE001 — triton missing or has no language module (old builds)
+    tl = None
+
+
+def _record_unavailable(results, test, config, unit, kind, dtype, what):
+    """Record a row the capability probe refused to run: the codegen path itself is unusable for this
+    dtype on this stack (a vendor SIGSEGV, not a numerical failure). Marked `skipped` like the other
+    not-attempted rows, with `error_kind=unsupported` so the reason stays in the JSON."""
+    results.append(dict(test=test, config=config, value=None, unit=unit, status="skipped",
+                        error_kind="unsupported",
+                        error=t("{what} is unusable for {dtype} on this stack: {detail}",
+                                what=what, dtype=dtype, detail=path_failure(kind, dtype))))
+    print_row(results[-1])
+
 
 # ---------------------------------------------------------------- tests
 def test_gemm(results, dev, a):
@@ -100,6 +117,11 @@ def test_vec(results, dev, a):
     numel = 2 * 1024 * 1024  # 8MiB fp32 / 4MiB fp16: stays in L2/LLC, removing the DRAM constraint
     fp32_value = {}
     for name in ("fp32", "fp16", "bf16"):
+        if a.path_canary and dev.type == "cuda" and not path_works("compile", name):
+            _record_unavailable(results, "vec_flops", f"{name} chain{chain}", "TFLOPS",
+                                "compile", name, "torch.compile")
+            continue
+
         def run(name=name):
             t0 = torch.randn(numel, device=dev, dtype=AMP[name])
 
@@ -134,7 +156,10 @@ def test_vec(results, dev, a):
     packed_kernel = None
     try:
         import triton
-        import triton.language as tl
+        # triton's JIT resolves free names from the kernel's *module* globals; importing inside this
+        # function leaves `tl` a local and some versions (3.3) then raise NameError('tl is not defined').
+        if tl is None:
+            raise ImportError("triton.language unavailable")
 
         @triton.jit
         def _packed_fma(ptr, out, numel, BLOCK: tl.constexpr, CHAIN: tl.constexpr):
@@ -155,6 +180,11 @@ def test_vec(results, dev, a):
                     if r["test"] == "vec_flops" and "triton" not in r["config"] and r.get("value")}
     grid = ((numel + 1023) // 1024,)
     for name in ("fp32", "fp16", "bf16"):
+        if packed_kernel is not None and a.path_canary and dev.type == "cuda" and not path_works("triton", name):
+            _record_unavailable(results, "vec_flops", f"{name} chain{chain} triton-native", "TFLOPS",
+                                "triton", name, "the native Triton kernel")
+            continue
+
         def run_packed(name=name):
             if packed_kernel is None:
                 raise RuntimeError(t("triton unavailable (platform without a native Triton backend)"))

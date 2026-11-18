@@ -74,6 +74,11 @@ from .ops import test_bandwidth, test_gemm, test_memory_wall, test_vec
 from .models import (_model_vram_estimate, test_gpt, test_gpt_decode, test_hf_decode,
                      test_llama, test_moe, test_resnet, test_train)
 
+# --tests dispatch ids: anything else must error, because an unknown name silently contributes no rows
+KNOWN_TESTS = {"probe", "gemm", "gemv", "int8_gemm", "gemv_int8", "vec", "bandwidth", "memory_wall",
+               "resnet", "train", "gpt", "llama", "moe", "decode", "hf"}
+TEST_ALIASES = {"hf_decode": "hf"}
+
 # ---------------------------------------------------------------- Compare mode
 def compare(paths):
     runs = [json.load(open(p)) for p in paths]
@@ -193,6 +198,10 @@ def main():
     p.add_argument("--no-vram-check", action="store_true",
                    help=t("disable the pre-run VRAM check (by default oversized model tests are downgraded "
                           "to quick presets based on total device memory)"))
+    p.add_argument("--path-canary", action="store_true",
+                   help=t("probe each torch.compile / Triton codegen path in a throwaway subprocess first; "
+                          "costs ~30 s per dtype but keeps a vendor codegen crash from taking the whole "
+                          "group down (off by default)"))
     p.add_argument("--lang", default="auto", choices=["auto"] + available_languages(),
                    help=t("output language: auto / en / zh (auto = $TORCHPEAK_LANG, then system locale)"))
     a = p.parse_args()
@@ -250,9 +259,17 @@ def main():
     if a.tuned:
         print(t("== tuned track enabled: {knobs}", knobs=tuned_applied))
 
-    tests = set(a.tests.split(","))
+    tests = {TEST_ALIASES.get(name, name) for name in a.tests.split(",")}
+    unknown = sorted(tests - KNOWN_TESTS)
+    if unknown:
+        # silently dropping an unknown name looks like a clean run with zero rows (e.g. --tests hf_decode)
+        p.error(t("unknown test name(s): {names}; known: {known}",
+                  names=", ".join(unknown), known=", ".join(sorted(KNOWN_TESTS))))
     if a.hf_model:
         tests.add("hf")
+    elif "hf" in tests:
+        # without a model this test can only emit nothing, which reads as a clean run with zero rows
+        p.error(t("--tests hf requires --hf-model (e.g. Qwen/Qwen2.5-0.5B-Instruct)"))
 
     # VRAM preflight: full-scale runs OOM whole pairs on low-memory cards (a compare pair keeps ~3 fp32
     # instances alive), so estimate from total device memory first and downgrade models that don't fit to quick.
@@ -308,7 +325,7 @@ def main():
             test_moe(results, dev, a)
         if "decode" in tests:
             test_gpt_decode(results, dev, a)
-        if "hf" in tests and a.hf_model:
+        if "hf" in tests:
             test_hf_decode(results, dev, a)
 
     peak_entries, peaks_source = load_peak_entries(a.peaks)

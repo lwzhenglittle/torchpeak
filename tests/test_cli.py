@@ -1,13 +1,14 @@
 import contextlib
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from torchpeak.cli import main
+from torchpeak.cli import KNOWN_TESTS, TEST_ALIASES, main
 
 
 class CliTests(unittest.TestCase):
@@ -40,6 +41,37 @@ class CliTests(unittest.TestCase):
         code, result = self.run_with_error("unsupported", ("--strict-errors",))
         self.assertEqual(code, 1)
         self.assertTrue(result["meta"]["args"]["strict_errors"])
+
+    def run_argv(self, argv):
+        """Drive main() with fixed argv; returns the SystemExit code (usage errors exit 2)."""
+        with patch.object(sys, "argv", ["torchpeak", *argv]):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    main()
+        return cm.exception.code
+
+    def test_unknown_test_id_exits_two(self):
+        self.assertEqual(self.run_argv(["--tests", "bogus", "--device", "cpu"]), 2)
+
+    def test_hf_without_model_exits_two(self):
+        self.assertEqual(self.run_argv(["--tests", "hf", "--device", "cpu"]), 2)
+
+    def test_hf_decode_is_an_alias(self):
+        self.assertEqual(TEST_ALIASES.get("hf_decode"), "hf")
+
+    def test_known_tests_match_the_documented_list(self):
+        """--tests ids drift silently: an id in the parser help but missing from KNOWN_TESTS (or the
+        reverse) would either reject a valid test or run nothing without a word."""
+        buf = io.StringIO()
+        with patch.object(sys, "argv", ["torchpeak", "--help", "--lang", "en"]):
+            with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+                main()
+        # argparse wraps mid-token (e.g. "gemv_in\nt8"), so compare against a whitespace-free copy
+        flat = re.sub(r"\s+", "", buf.getvalue())
+        m = re.search(r"comma-separated:probe,([a-z0-9_,]+);", flat)
+        self.assertIsNotNone(m, "the --tests help line changed shape")
+        documented = {"probe"} | {name for name in m.group(1).split(",") if name}
+        self.assertEqual(documented, set(KNOWN_TESTS))
 
 
 if __name__ == "__main__":

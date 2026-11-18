@@ -130,6 +130,7 @@ reference, with per-dtype tolerances. Identical NaN on both sides passes and is 
 --tuned                            apply one-line knobs (TF32, cudnn.benchmark), recorded in meta
 --peaks my.json / $TORCHPEAK_PEAKS spec-peak table override
 --hf-model Qwen/Qwen2.5-0.5B-Instruct   optional real-weight decode row
+--path-canary                     probe each compile/Triton codegen path in a subprocess first (off)
 --label / --outdir / --no-report   output naming; --compare a.json b.json for multi-run tables
 --lang auto|en|zh                 output language ($TORCHPEAK_LANG, then system locale)
 ```
@@ -151,10 +152,27 @@ target, `torch._int_mm`, Inductor) degrade to recorded error rows, not a crashed
 
 | Backend | Status |
 | --- | --- |
-| CUDA / ROCm | tested (GTX 1660 Ti, cu132; ROCm via `cuda` device type) |
+| CUDA / ROCm | tested (GTX 1660 Ti, cu132; ROCm via `cuda` device type; Hygon DCU BW on DTK 26.04 — see below) |
 | Intel XPU | tested (Arc B390 iGPU; auto adds a user-level `ocloc` shim when the distro ships only `ocloc-<ver>`, recycled on exit incl. SIGTERM) |
 | CPU | tested (launch path, torch.compile C++ backend, honest per-row errors where the stack can't do fp16 backward) |
 | MPS / NPU / MUSA | code paths present, not yet hardware-verified |
+
+**ROCm-derived vendor stacks (Hygon DCU + DTK, tested).** One failure mode there is not a Python
+exception: Triton can emit LLVM IR the vendor ComGR rejects (LLVM-19+ `nuw` on `getelementptr`
+against an LLVM-17 ComGR), and the result is a SIGSEGV, not an exception — one dtype then takes the
+whole test group with it. `--path-canary` runs each compile/native-Triton dtype in a throwaway
+subprocess first and records an `unsupported` row instead. It is **off by default** because on a
+working stack it only adds compiles (~30 s per dtype); turn it on when the vendor toolchain is
+suspect, and prefer fixing the toolchain: on this machine the segfault disappeared with a
+Triton built for the installed ComGR (DTK 3.3.0) rather than a newer upstream one (3.5.1, LLVM 22).
+
+The other vendor trap is packaging, not code: a `flash_attn` extension built for a different torch
+aborts the process (`symbol lookup error: undefined symbol ... c10::hip::...`) the first time fp16/
+bf16 SDPA reaches the flash backend. It cannot be intercepted from Python (the dispatcher dlopens the
+`.so` by absolute path), so torchpeak does not try; install the wheel whose local version matches the
+torch build (`...torch290` for torch 2.9.0). Hoping to mask it by importing `flash_attn` first does
+not work — a missing transitive dependency raises the same `ModuleNotFoundError` a clean install
+would, and the import is unrelated to which `.so` gets loaded.
 
 Methodology and implementation details: [`docs/design.md`](docs/design.md) —
 中文版：[`docs/design-zh.md`](docs/design-zh.md).

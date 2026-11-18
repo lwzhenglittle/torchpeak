@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 
 import torch
 
@@ -116,6 +117,104 @@ def device_info(dev):
     except Exception as e:
         info["info_error"] = str(e)
     return info
+
+
+# ---------------------------------------------------------------- vendor capability probes
+# Some vendor stacks ship a torch extension or compiler whose mismatch with the installed torch is
+# not a Python exception: the dynamic loader kills the process, or the codegen path faults, before
+# any except-block can run. Rows driven through those paths are therefore gated by an out-of-process
+# probe; the parent process only touches a path a child process survived.
+_CANARY = r"""
+import sys
+import torch
+
+dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[sys.argv[1]]
+kind = sys.argv[2]
+numel = 1 << 16
+x = torch.randn(numel, device="cuda", dtype=dtype)
+
+if kind == "compile":
+    def chain(t):
+        for _ in range(4):
+            t = t * 1.0001 + 0.0001
+        return t
+    y = torch.compile(chain)(x)
+elif kind == "triton":
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def k(ptr, out, n, BLOCK: tl.constexpr, CHAIN: tl.constexpr):
+        offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        m = offs < n
+        v = tl.load(ptr + offs, mask=m)
+        c1 = tl.full((), 1.0001, v.dtype)
+        c2 = tl.full((), 0.0001, v.dtype)
+        for _ in tl.static_range(CHAIN):
+            v = v * c1 + c2
+        tl.store(out + offs, v, mask=m)
+
+    y = torch.empty_like(x)
+    k[(numel // 1024,)](x, y, numel, BLOCK=1024, CHAIN=4)
+else:
+    raise SystemExit("unknown kind: " + kind)
+
+torch.cuda.synchronize()
+print(float(y[0]))
+"""
+
+_PATH_OK = {}
+_PATH_DETAIL = {}
+
+
+def _canary_tail(stderr):
+    """First line that looks like a real compiler error, else the last non-empty line."""
+    lines = [ln.strip() for ln in stderr.decode(errors="replace").splitlines() if ln.strip()]
+    for ln in lines:
+        if "error" in ln.lower():
+            return ln[:100]
+    return (lines[-1] if lines else "")[:100]
+
+
+def path_works(kind, dtype_name, timeout=120):
+    """Return True when `kind` ('compile' for a small Inductor-fused chain, 'triton' for a small
+    native Triton kernel) runs to completion on `dtype_name`. A vendor codegen crash (e.g. Triton
+    emitting LLVM IR its own ComGR rejects) is a SIGSEGV inside the process, so the probe runs it in
+    a throwaway subprocess — written to a real file, because triton.jit needs inspect.getsource().
+    Off by default (--path-canary): on a working stack the probe produces nothing but ~30 s per
+    dtype of extra compiles. Results are cached per process."""
+    key = (kind, dtype_name)
+    if key not in _PATH_OK:
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+                f.write(_CANARY)
+                tmp = f.name
+            p = subprocess.run([sys.executable, tmp, dtype_name, kind],
+                               capture_output=True, timeout=timeout)
+            rc = p.returncode
+            _PATH_OK[key] = rc == 0
+            if rc == 0:
+                _PATH_DETAIL[key] = "ok"
+            elif rc < 0:
+                _PATH_DETAIL[key] = f"killed by signal {-rc} ({_canary_tail(p.stderr)})"
+            else:
+                _PATH_DETAIL[key] = f"exit {rc} ({_canary_tail(p.stderr)})"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            _PATH_OK[key] = False
+            _PATH_DETAIL[key] = type(e).__name__
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+    return _PATH_OK[key]
+
+
+def path_failure(kind, dtype_name):
+    """Human-readable reason recorded by the last path_works() probe for this (kind, dtype)."""
+    return _PATH_DETAIL.get((kind, dtype_name), "not probed")
 
 
 def find_ocloc():
