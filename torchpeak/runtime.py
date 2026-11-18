@@ -100,6 +100,17 @@ def mod(dev):
     return getattr(torch, dev.type, None)  # torch.cuda / torch.xpu / torch.mps / torch.cpu / torch.tpu
 
 
+def _call_indexed(fn, dev, *args, **kw):
+    """Call a backend hook that accepts an optional device index; indexless hooks (MPS) fall back.
+    Without this, `--device cuda:1` would synchronize/sample device 0 and report wrong timings."""
+    if dev.index is None:
+        return fn(*args, **kw)
+    try:
+        return fn(dev.index, *args, **kw)
+    except TypeError:
+        return fn(*args, **kw)
+
+
 def sync(dev):
     acc = _accelerator(dev)
     if acc is not None:
@@ -110,7 +121,7 @@ def sync(dev):
             pass  # fall through to the legacy hook so the failure surfaces instead of hiding it
     m = mod(dev)
     if m is not None and hasattr(m, "synchronize"):
-        m.synchronize()
+        _call_indexed(m.synchronize, dev)
 
 
 def reset_peak(dev):
@@ -124,7 +135,7 @@ def reset_peak(dev):
     m = mod(dev)
     if m is not None and hasattr(m, "reset_peak_memory_stats"):
         try:
-            m.reset_peak_memory_stats()
+            _call_indexed(m.reset_peak_memory_stats, dev)
         except Exception:
             pass
 
@@ -133,7 +144,7 @@ def peak_gb(dev):
     for m in (_accelerator(dev), mod(dev)):
         if m is not None and hasattr(m, "max_memory_allocated"):
             try:
-                return round(m.max_memory_allocated() / 1e9, 2)
+                return round(_call_indexed(m.max_memory_allocated, dev) / 1e9, 2)
             except Exception:
                 return None
     return None
@@ -148,7 +159,7 @@ def peak_reserved_gb(dev):
     for m in (_accelerator(dev), mod(dev)):
         if m is not None and hasattr(m, "max_memory_reserved"):
             try:
-                return round(m.max_memory_reserved() / 1e9, 2)
+                return round(_call_indexed(m.max_memory_reserved, dev) / 1e9, 2)
             except Exception:
                 return None
     return None

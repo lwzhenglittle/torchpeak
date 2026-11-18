@@ -157,6 +157,9 @@ OOM 时自动减半 batch；可选项 `--hf-model` 用真实 HF 权重补一行�
   `torch.cuda / torch.xpu / torch.mps / torch.cpu`，能力缺失时安全降级（返回 None 而非崩溃）；
   旧模块已成内部/废弃 shim 的设备类型（PyTorch ≥ 2.11 上的 TPU，`torch.tpu.synchronize` 会抛错）
   改走 `torch.accelerator.*`。
+- 一个进程只基准一个加速器。`--device TYPE:N` 在指定设备上分配，旧后端钩子会带上设备序号
+  （同步、峰值显存重置/采样），因此 `cuda:1` 的测量不再同步/采样 `cuda:0`；无序号参数的钩子
+  （MPS）回退到无参调用。默认 label 追加设备序号。多设备用多进程分别跑，再用 `--compare` 合并。
 - UMA / iGPU 上 caching allocator 的 reserved 与 allocated 差距大，两个口径都记录。
 - **XPU ocloc shim**：Triton-XPU 生成 zebin 时以裸名 `ocloc` 起子进程，而部分发行版只装
   `ocloc-<ver>`；运行前在用户级临时目录建符号链接并入 PATH，`atexit`（含 SIGTERM）回收。

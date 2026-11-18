@@ -134,6 +134,40 @@ class AcceleratorRoutingTests(unittest.TestCase):
         self.assertEqual(fake._dev.index, 1)
 
 
+class DeviceIndexRoutingTests(unittest.TestCase):
+    def test_indexed_hooks_target_the_requested_device(self):
+        calls = []
+
+        class FakeCuda:
+            def synchronize(self, device=None):
+                calls.append(("sync", device))
+
+            def max_memory_allocated(self, device=None):
+                calls.append(("mem", device))
+                return 2 * 10 ** 9
+
+        dev = torch.device("cuda:1")
+        with patch.object(runtime, "torch", types.SimpleNamespace(cuda=FakeCuda())):
+            runtime.sync(dev)
+            self.assertEqual(runtime.peak_gb(dev), 2.0)
+        self.assertEqual(calls, [("sync", 1), ("mem", 1)])
+
+    def test_indexless_hooks_fall_back_to_no_argument(self):
+        calls = []
+
+        class FakeMps:
+            def synchronize(self):  # no device parameter, like torch.mps
+                calls.append("sync")
+
+        with patch.object(runtime, "torch", types.SimpleNamespace(mps=FakeMps())):
+            runtime.sync(torch.device("mps:0"))
+        self.assertEqual(calls, ["sync"])
+
+    def test_reserved_memory_is_not_reported_for_tpu(self):
+        dev = types.SimpleNamespace(type="tpu", index=0)
+        self.assertIsNone(runtime.peak_reserved_gb(dev))
+
+
 class CompileAndOomTests(unittest.TestCase):
     def test_tpu_compile_backend_is_passed_and_mode_skipped(self):
         seen = {}

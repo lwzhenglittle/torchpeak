@@ -247,8 +247,8 @@ def main():
             tuned_applied.append("cudnn.benchmark=True")
     info = device_info(dev)
     default_label = f"{socket.gethostname()}_{dev.type}"
-    if dev.type == "tpu" and info.get("device_index") is not None:
-        default_label += str(info["device_index"])  # one process per TPU device; keep runs distinct
+    if dev.index is not None:
+        default_label += str(dev.index)  # one process per device; keep per-device runs distinct
     label = a.label or default_label
     meta = dict(format_version=2, label=label, torch=torch.__version__, python=sys.version.split()[0], platform=platform.platform(),
                 amp=a.amp, amp_list=amp_names, quick=a.quick, strict=a.strict, compile=a.compile,

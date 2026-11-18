@@ -58,6 +58,24 @@ python -m torchpeak --amp all               # fp32 / fp16 / bf16 for model tests
 python -m torchpeak --compare results/bench_*.json   # side-by-side across runs/machines
 ```
 
+**Two (or more) accelerators.** One process benchmarks one device, so run one process per device and
+merge the JSON afterwards. Either pin visibility or name the index:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m torchpeak --quick --label rig-gpu0
+CUDA_VISIBLE_DEVICES=1 python -m torchpeak --quick --label rig-gpu1
+# or, from a single shell without CUDA_VISIBLE_DEVICES:
+python -m torchpeak --device cuda:1 --quick --label rig-gpu1
+python -m torchpeak --compare results/bench_rig-gpu0.json results/bench_rig-gpu1.json
+```
+
+`--device TYPE:N` allocates tensors on that device and now also synchronizes and samples memory on it
+(previously the hooks acted on the current device, i.e. `:0`). The default label appends the device
+index. Run the two processes **sequentially** for publishable absolute numbers: concurrently they share
+power budget, PCIe/host memory bandwidth and (on MIG/SXM boards) thermal headroom. One process per
+device is also the only supported model on TPU (`TPU_VISIBLE_DEVICES` behaves like
+`CUDA_VISIBLE_DEVICES`).
+
 ## What it measures
 
 | Layer | Tests | What they exercise |
