@@ -255,5 +255,36 @@
   "sources": [
    "https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series.html"
   ]
+ },
+ {
+  "match": "9070 xt",
+  "device": "AMD Radeon RX 9070 XT (RDNA4 Navi48, 64 CU / 4096 SP @ 2.97 GHz)",
+  "tflops": {
+   "fp32": 48.7,
+   "fp16": 97.4,
+   "bf16": 97.4
+  },
+  "int8_tops": 194.9,
+  "vec_tflops": {
+   "fp32": 48.7,
+   "fp16": 48.7,
+   "bf16": 48.7
+  },
+  "vec_packed_tflops": {
+   "fp16": 97.4,
+   "bf16": 97.4
+  },
+  "bw_gbs": 644.6,
+  "basis": {
+   "fp32": "AMD published peak FP32 48.7 TFLOPS (4096 SP, 2.97 GHz boost)",
+   "fp16/bf16": "AMD published peak FP16 97.4 TFLOPS; bf16 shares the rate",
+   "int8": "AMD published peak INT8 194.9 TOPS",
+   "vec_fp16": "vec_tflops follows torch opmath fp32 semantics (fp16/bf16 top out at the fp32 rate); the 2x packed rate needs a native half2 kernel. On the Windows ROCm build the torch path measured 1.39x fp32, i.e. it already emits some packed ops, so the fp16/bf16 vec_tflops column is an upper bound, not a hard ceiling.",
+   "vec_packed_bf16": "the packed rate is architectural; ROCm's Triton bf16 lowering currently falls back to scalar emulation (results/community/rx9070xt measured 3.4% of it), so a low native-bf16 row is a stack artifact rather than the hardware limit",
+   "bw": "AMD published 644.6 GB/s (16 GB GDDR6, 256-bit, 20 Gbps)"
+  },
+  "sources": [
+   "https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html"
+  ]
  }
 ]
