@@ -11,6 +11,7 @@ recipe and rules; `scripts/validate_result.py` checks every file in CI.
 | [rtx5090](rtx5090/rtx5090.json) | NVIDIA GeForce RTX 5090 (Blackwell GB202, 32 GB, 170 CUs) | full default suite, torch 2.15.0+cu132 (cuda:0 of a dual-GPU host) |
 | [rtx-pro-6000](rtx-pro-6000/rtx-pro-6000.json) | NVIDIA RTX PRO 6000 Blackwell Workstation Edition (GB202, 96 GiB, 188 CUs) | full default suite, torch 2.15.0+cu132 (cuda:0 of a dual-GPU host) |
 | [rx9070xt](rx9070xt/rx9070xt.json) | AMD Radeon RX 9070 XT (RDNA4, 16 GB) | full default suite, torch 2.15.0+rocm10.2.0 on Windows 10 (ROCm Windows build; bf16 Triton and large-n int8 GEMV rows are stack artifacts) |
+| [m4-mba-24g](m4-mba-24g/m4-mba-24g.json) | Apple M4 MacBook Air, 24 GB unified memory (10-core CPU / 10-core GPU) | full default suite, torch 2.15.0 / Python 3.15.2 on macOS 26.2.1 (MPS); 3 triton-native rows are MPS platform errors (no native Triton backend) |
 
 Measured values here feed `peaks.json` entries: `basis: "measured, see results/community/<slug>/<slug>.json"`.
 HTML reports are not stored — they regenerate from the JSON (`meta` + `results`). The `<file>.md`
